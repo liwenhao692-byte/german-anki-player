@@ -17,16 +17,16 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.util.Base64;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.GZIPInputStream;
 
 public class PlaybackService extends Service {
     public static final String ACTION_START = "com.liben.germananki.START";
@@ -65,7 +65,6 @@ public class PlaybackService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (action == null) action = ACTION_START;
-
         ensureForeground("德语 Anki 播放器", "准备播放");
 
         if (ACTION_START.equals(action)) {
@@ -110,31 +109,37 @@ public class PlaybackService extends Service {
     private void loadCardsIfNeeded() {
         if (!cards.isEmpty()) return;
         try {
-            InputStream is = getAssets().open("cards.json");
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int n;
-            while ((n = is.read(buffer)) != -1) bos.write(buffer, 0, n);
-            String json = bos.toString("UTF-8");
-            JSONArray array = new JSONArray(json);
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject o = array.getJSONObject(i);
-                cards.add(new Card(
-                        o.optInt("id", i + 1),
-                        o.optString("front", ""),
-                        o.optString("meaning", ""),
-                        o.optString("deck", "")
-                ));
+            InputStream is = getAssets().open("cards.tsv.gz.b64");
+            String b64 = readAll(is).replaceAll("\\s+", "");
+            byte[] gz = Base64.decode(b64, Base64.DEFAULT);
+            String tsv = readAll(new GZIPInputStream(new ByteArrayInputStream(gz)));
+            String[] lines = tsv.split("\\n");
+            for (String line : lines) {
+                if (line.trim().isEmpty()) continue;
+                String[] p = line.split("\\t", -1);
+                if (p.length >= 4) {
+                    int id = 0;
+                    try { id = Integer.parseInt(p[0]); } catch (Exception ignored) {}
+                    cards.add(new Card(id, p[1], p[2], p[3]));
+                }
             }
         } catch (Exception e) {
             cards.clear();
         }
     }
 
+    private String readAll(InputStream is) throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int n;
+        while ((n = is.read(buffer)) != -1) bos.write(buffer, 0, n);
+        return bos.toString("UTF-8");
+    }
+
     private void playCurrentSegment() {
         loadCardsIfNeeded();
         if (cards.isEmpty()) {
-            updateNotification("没有卡片数据", "assets/cards.json 缺失");
+            updateNotification("没有卡片数据", "assets/cards.tsv.gz.b64 缺失");
             return;
         }
         int total = Math.max(1, deRepeat + zhRepeat);
