@@ -17,16 +17,13 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.util.Base64;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.zip.GZIPInputStream;
 
 public class PlaybackService extends Service {
     public static final String ACTION_START = "com.liben.germananki.START";
@@ -109,10 +106,8 @@ public class PlaybackService extends Service {
     private void loadCardsIfNeeded() {
         if (!cards.isEmpty()) return;
         try {
-            InputStream is = getAssets().open("cards.tsv.gz.b64");
-            String b64 = readAll(is).replaceAll("\\s+", "");
-            byte[] gz = Base64.decode(b64, Base64.DEFAULT);
-            String tsv = readAll(new GZIPInputStream(new ByteArrayInputStream(gz)));
+            InputStream is = getAssets().open("cards.tsv");
+            String tsv = readAll(is);
             String[] lines = tsv.split("\\n");
             for (String line : lines) {
                 if (line.trim().isEmpty()) continue;
@@ -139,7 +134,7 @@ public class PlaybackService extends Service {
     private void playCurrentSegment() {
         loadCardsIfNeeded();
         if (cards.isEmpty()) {
-            updateNotification("没有卡片数据", "assets/cards.tsv.gz.b64 缺失");
+            updateNotification("没有卡片数据", "assets/cards.tsv 缺失");
             return;
         }
         int total = Math.max(1, deRepeat + zhRepeat);
