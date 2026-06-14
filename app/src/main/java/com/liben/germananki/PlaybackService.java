@@ -57,6 +57,7 @@ public class PlaybackService extends Service {
     private int zhRepeat = 1;
     private int gapMs = 500;
     private float speed = 0.9f;
+    private float activeSpeed = 0.9f;
     private String deLang = "de";
     private String zhLang = "zh-CN";
     private int retryCount = 0;
@@ -81,6 +82,7 @@ public class PlaybackService extends Service {
             zhRepeat = Math.max(0, intent.getIntExtra("zhRepeat", 1));
             gapMs = Math.max(0, intent.getIntExtra("gapMs", 500));
             speed = clamp(intent.getFloatExtra("speed", 0.9f), 0.55f, 1.6f);
+            activeSpeed = speed;
             deLang = cleanLang(intent.getStringExtra("deLang"), "de");
             zhLang = cleanLang(intent.getStringExtra("zhLang"), "zh-CN");
             spellMode = intent.getBooleanExtra("spellMode", false);
@@ -144,8 +146,11 @@ public class PlaybackService extends Service {
                 String front = obj.optString("front", "");
                 String meaning = obj.optString("meaning", "");
                 String deck = obj.optString("deck", "");
+                String pos = obj.optString("pos", "");
+                String example = obj.optString("example", "");
+                String exampleCn = obj.optString("exampleCn", "");
                 if (front.trim().length() == 0 && meaning.trim().length() == 0) continue;
-                cards.add(new Card(id, front, meaning, deck));
+                cards.add(new Card(id, front, meaning, deck, pos, example, exampleCn));
             }
         } catch (Exception e) {
             cards.clear();
@@ -163,7 +168,7 @@ public class PlaybackService extends Service {
                 if (p.length >= 4) {
                     int id = 0;
                     try { id = Integer.parseInt(p[0]); } catch (Exception ignored) {}
-                    cards.add(new Card(id, p[1], p[2], p[3]));
+                    cards.add(new Card(id, p[1], p[2], p[3], "", "", ""));
                 }
             }
         } catch (Exception e) {
@@ -187,54 +192,69 @@ public class PlaybackService extends Service {
             return;
         }
 
-        Card card = cards.get(cardIndex);
-        String text;
-        String lang;
-        String phase;
-
-        if (spellMode) {
-            int normalCount = Math.max(1, deRepeat);
-            int total = normalCount + 1 + Math.max(0, zhRepeat);
-            if (segmentInCard >= total) {
-                segmentInCard = 0;
-                cardIndex = (cardIndex + 1) % cards.size();
-                card = cards.get(cardIndex);
-            }
-            if (segmentInCard < normalCount) {
-                text = cleanGerman(card.front);
-                lang = deLang;
-                phase = "德语单词";
-            } else if (segmentInCard == normalCount) {
-                text = spellGerman(card.front);
-                lang = deLang;
-                phase = "单词拼读";
-            } else {
-                text = cleanChinese(card.meaning);
-                lang = zhLang;
-                phase = "中文释义";
-            }
-        } else {
-            int total = Math.max(1, deRepeat + zhRepeat);
-            if (segmentInCard >= total) {
-                segmentInCard = 0;
-                cardIndex = (cardIndex + 1) % cards.size();
-                card = cards.get(cardIndex);
-            }
-            boolean german = segmentInCard < deRepeat;
-            text = german ? cleanGerman(card.front) : cleanChinese(card.meaning);
-            lang = german ? deLang : zhLang;
-            phase = german ? "德语原声" : "中文原声";
-        }
-
-        if (text.length() == 0) {
-            advanceSegment();
+        Segment seg = nextPlayableSegment();
+        if (seg == null || seg.text.length() == 0) {
+            updateNotification("没有可播放内容", "当前卡片缺少文本");
             return;
         }
-        String title = (cardIndex + 1) + " / " + cards.size() + " · " + phase;
+
+        activeSpeed = seg.speed;
+        String title = (cardIndex + 1) + " / " + cards.size() + " · " + seg.phase;
+        Card card = cards.get(cardIndex);
         String sub = card.front + " ｜ " + card.meaning;
         updateNotification(title, sub);
         updatePlaybackState(false);
-        playUrl(ttsUrl(text, lang));
+        playUrl(ttsUrl(seg.text, seg.lang));
+    }
+
+    private Segment nextPlayableSegment() {
+        int guard = 0;
+        while (guard++ < 40) {
+            if (cardIndex < 0 || cardIndex >= cards.size()) cardIndex = 0;
+            Card card = cards.get(cardIndex);
+            Segment seg = spellMode ? segmentForFullSpell(card, segmentInCard) : segmentForNormal(card, segmentInCard);
+            if (seg.endOfCard) {
+                segmentInCard = 0;
+                cardIndex = (cardIndex + 1) % cards.size();
+                continue;
+            }
+            if (seg.text != null && seg.text.trim().length() > 0) return seg;
+            segmentInCard++;
+        }
+        return null;
+    }
+
+    private Segment segmentForNormal(Card card, int segIndex) {
+        int total = Math.max(1, deRepeat + zhRepeat);
+        if (segIndex >= total) return Segment.end();
+        boolean german = segIndex < deRepeat;
+        return new Segment(german ? cleanGerman(card.front) : cleanChinese(card.meaning), german ? deLang : zhLang, german ? "德语原声" : "中文原声", speed, false);
+    }
+
+    private Segment segmentForFullSpell(Card card, int segIndex) {
+        String word = cleanGerman(card.front);
+        String letters = spellGerman(card.front);
+        String cn = cleanChinese(card.meaning);
+        String phrase = phraseText(card);
+        String sentence = cleanGerman(card.example);
+        String sentenceCn = cleanChinese(card.exampleCn);
+
+        if (segIndex <= 2) return new Segment(word, deLang, "慢速单词", 0.62f, false);
+        if (segIndex <= 4) return new Segment(letters, deLang, "单词拼读", 0.72f, false);
+        if (segIndex <= 7) return new Segment(word, deLang, "正常单词", speed, false);
+        if (segIndex == 8) return new Segment(cn, zhLang, "中文意思", speed, false);
+        if (segIndex == 9) return new Segment(phrase, deLang, "词块", speed, false);
+        if (segIndex == 10) return new Segment(sentence, deLang, "句子", speed, false);
+        if (segIndex == 11) return new Segment(sentenceCn, zhLang, "句子中文", speed, false);
+        return Segment.end();
+    }
+
+    private String phraseText(Card card) {
+        String front = cleanGerman(card.front);
+        if (front.length() == 0) return "";
+        if (!"单词".equals(card.pos)) return front;
+        if (front.indexOf(' ') >= 0) return front;
+        return "";
     }
 
     private void playUrl(String url) {
@@ -252,7 +272,7 @@ public class PlaybackService extends Service {
                 try {
                     if (Build.VERSION.SDK_INT >= 23) {
                         PlaybackParams params = mp.getPlaybackParams();
-                        params.setSpeed(speed);
+                        params.setSpeed(activeSpeed);
                         mp.setPlaybackParams(params);
                     }
                 } catch (Exception ignored) {}
@@ -398,8 +418,7 @@ public class PlaybackService extends Service {
             if (spelled.length() > 0) spelled.append(", ");
             spelled.append(part);
         }
-        if (spelled.length() == 0) return base;
-        return base + ". " + spelled + ". " + base + ".";
+        return spelled.toString();
     }
 
     private String cleanChinese(String s) {
@@ -518,22 +537,44 @@ public class PlaybackService extends Service {
                 PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
         mediaSession.setPlaybackState(new PlaybackState.Builder()
                 .setActions(actions)
-                .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, isPaused ? 0f : speed)
+                .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, isPaused ? 0f : activeSpeed)
                 .build());
     }
 
     private float clamp(float v, float min, float max) { return Math.max(min, Math.min(max, v)); }
+
+    private static class Segment {
+        final String text;
+        final String lang;
+        final String phase;
+        final float speed;
+        final boolean endOfCard;
+        Segment(String text, String lang, String phase, float speed, boolean endOfCard) {
+            this.text = text == null ? "" : text;
+            this.lang = lang;
+            this.phase = phase;
+            this.speed = speed;
+            this.endOfCard = endOfCard;
+        }
+        static Segment end() { return new Segment("", "", "", 1f, true); }
+    }
 
     private static class Card {
         final int id;
         final String front;
         final String meaning;
         final String deck;
-        Card(int id, String front, String meaning, String deck) {
+        final String pos;
+        final String example;
+        final String exampleCn;
+        Card(int id, String front, String meaning, String deck, String pos, String example, String exampleCn) {
             this.id = id;
             this.front = front;
             this.meaning = meaning;
             this.deck = deck;
+            this.pos = pos;
+            this.example = example;
+            this.exampleCn = exampleCn;
         }
     }
 }
