@@ -37,6 +37,7 @@ public class PlaybackService extends Service {
     public static final String ACTION_RESUME = "com.liben.germananki.RESUME";
     public static final String ACTION_NEXT = "com.liben.germananki.NEXT";
     public static final String ACTION_PREV = "com.liben.germananki.PREV";
+    public static final String ACTION_CARD_CHANGED = "com.liben.germananki.CARD_CHANGED";
 
     private static final int NOTIFICATION_ID = 1001;
     private static final String CHANNEL_ID = "german_anki_media";
@@ -54,6 +55,7 @@ public class PlaybackService extends Service {
     private boolean paused = false;
     private boolean playing = false;
     private boolean trainingMode = false;
+    private boolean randomReadMode = false;
     private boolean freeTextMode = false;
     private String freeTextTitle = "输入文本";
 
@@ -83,6 +85,7 @@ public class PlaybackService extends Service {
                 return START_STICKY;
             }
             freeTextMode = false;
+            randomReadMode = intent.getBooleanExtra("randomReadMode", false);
             deRepeat = Math.max(0, intent.getIntExtra("deRepeat", 2));
             zhRepeat = Math.max(0, intent.getIntExtra("zhRepeat", 1));
             wordSlowSpeed = clamp(intent.getFloatExtra("wordSlowSpeed", 0.62f), 0.40f, 1.3f);
@@ -112,7 +115,7 @@ public class PlaybackService extends Service {
     }
 
     private void startFreeTextPlan(String text, String lang, int repeat) {
-        freeTextMode = true; trainingMode = false; deLang = lang; retryCount = 0; paused = false; playing = true; segmentInCard = 0; clearPlan();
+        freeTextMode = true; randomReadMode = false; trainingMode = false; deLang = lang; retryCount = 0; paused = false; playing = true; segmentInCard = 0; clearPlan();
         freeTextTitle = text.length() > 28 ? text.substring(0, 28) + "…" : text;
         for (int i = 0; i < repeat; i++) addSeg(text, lang, "输入文本朗读", speed);
         acquireWakeLock(); playCurrentSegment();
@@ -122,89 +125,31 @@ public class PlaybackService extends Service {
     @Override public void onDestroy() { releasePlayer(); handler.removeCallbacksAndMessages(null); if (mediaSession != null) { mediaSession.setActive(false); mediaSession.release(); } releaseWakeLock(); super.onDestroy(); }
 
     private void loadCardsIfNeeded() { if (!cards.isEmpty()) return; loadCardsFromOriginalHtml(); if (cards.isEmpty()) loadCardsFromTsvFallback(); buildNounArticles(); }
-
-    private void loadCardsFromOriginalHtml() {
-        try {
-            String html = readAll(getAssets().open(ORIGINAL_HTML));
-            int marker = html.indexOf("const allCards"); if (marker < 0) marker = html.indexOf("allCards"); if (marker < 0) return;
-            int start = html.indexOf('[', marker), end = html.indexOf("];", start); if (start < 0 || end < 0 || end <= start) return;
-            JSONArray array = new JSONArray(html.substring(start, end + 1));
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject obj = array.optJSONObject(i); if (obj == null) continue;
-                int id = obj.optInt("id", i + 1);
-                String front = obj.optString("front", ""), meaning = obj.optString("meaning", ""), deck = obj.optString("deck", ""), pos = obj.optString("pos", ""), example = obj.optString("example", ""), exampleCn = obj.optString("exampleCn", "");
-                if (front.trim().length() == 0 && meaning.trim().length() == 0) continue;
-                cards.add(new Card(id, front, meaning, deck, pos, example, exampleCn));
-            }
-        } catch (Exception e) { cards.clear(); }
-    }
-
-    private void loadCardsFromTsvFallback() {
-        try {
-            String[] lines = readAll(getAssets().open("cards.tsv")).split("\\n");
-            for (String line : lines) {
-                if (line.trim().isEmpty()) continue; String[] p = line.split("\\t", -1);
-                if (p.length >= 4) { int id = 0; try { id = Integer.parseInt(p[0]); } catch (Exception ignored) {} cards.add(new Card(id, p[1], p[2], p[3], "", "", "")); }
-            }
-        } catch (Exception e) { cards.clear(); }
-    }
-
+    private void loadCardsFromOriginalHtml() { try { String html = readAll(getAssets().open(ORIGINAL_HTML)); int marker = html.indexOf("const allCards"); if (marker < 0) marker = html.indexOf("allCards"); if (marker < 0) return; int start = html.indexOf('[', marker), end = html.indexOf("];", start); if (start < 0 || end < 0 || end <= start) return; JSONArray array = new JSONArray(html.substring(start, end + 1)); for (int i = 0; i < array.length(); i++) { JSONObject obj = array.optJSONObject(i); if (obj == null) continue; int id = obj.optInt("id", i + 1); String front = obj.optString("front", ""), meaning = obj.optString("meaning", ""), deck = obj.optString("deck", ""), pos = obj.optString("pos", ""), example = obj.optString("example", ""), exampleCn = obj.optString("exampleCn", ""); if (front.trim().length() == 0 && meaning.trim().length() == 0) continue; cards.add(new Card(id, front, meaning, deck, pos, example, exampleCn)); } } catch (Exception e) { cards.clear(); } }
+    private void loadCardsFromTsvFallback() { try { String[] lines = readAll(getAssets().open("cards.tsv")).split("\\n"); for (String line : lines) { if (line.trim().isEmpty()) continue; String[] p = line.split("\\t", -1); if (p.length >= 4) { int id = 0; try { id = Integer.parseInt(p[0]); } catch (Exception ignored) {} cards.add(new Card(id, p[1], p[2], p[3], "", "", "")); } } } catch (Exception e) { cards.clear(); } }
     private void buildNounArticles() { nounArticles.clear(); for (Card c : cards) { List<String> words = wordsFrom(c.front); if (words.size() >= 2) { String article = words.get(0).toLowerCase(); if (article.equals("der") || article.equals("die") || article.equals("das")) nounArticles.put(words.get(1).toLowerCase(), article); } } }
     private String readAll(InputStream is) throws Exception { ByteArrayOutputStream bos = new ByteArrayOutputStream(); byte[] buffer = new byte[8192]; int n; while ((n = is.read(buffer)) != -1) bos.write(buffer, 0, n); return bos.toString("UTF-8"); }
 
     private void playCurrentSegment() {
         if (!playing || paused) return;
-        if (freeTextMode) {
-            Segment seg = nextFreeTextSegment();
-            if (seg == null) { updateNotification("文本朗读结束", freeTextTitle); playing = false; releaseWakeLock(); updatePlaybackState(true); return; }
-            activeSpeed = seg.speed; updateNotification(seg.phase, freeTextTitle); updatePlaybackState(false); playUrl(ttsUrl(seg.text, seg.lang)); return;
-        }
-        loadCardsIfNeeded();
-        if (cards.isEmpty()) { updateNotification("没有卡片数据", "原版 HTML 未解析到 allCards"); return; }
+        if (freeTextMode) { Segment seg = nextFreeTextSegment(); if (seg == null) { updateNotification("文本朗读结束", freeTextTitle); playing = false; releaseWakeLock(); updatePlaybackState(true); return; } activeSpeed = seg.speed; updateNotification(seg.phase, freeTextTitle); updatePlaybackState(false); playUrl(ttsUrl(seg.text, seg.lang)); return; }
+        loadCardsIfNeeded(); if (cards.isEmpty()) { updateNotification("没有卡片数据", "原版 HTML 未解析到 allCards"); return; }
         Segment seg = nextPlayableSegment(); if (seg == null || seg.text.length() == 0) { updateNotification("没有可播放内容", "当前卡片缺少文本"); return; }
-        activeSpeed = seg.speed; Card card = cards.get(cardIndex);
-        updateNotification((cardIndex + 1) + " / " + cards.size() + " · " + seg.phase, card.front + " ｜ " + card.meaning);
+        activeSpeed = seg.speed; Card card = cards.get(cardIndex); notifyCardChanged(card.id);
+        updateNotification((cardIndex + 1) + " / " + cards.size() + " · " + (randomReadMode ? "随机 · " : "") + seg.phase, card.front + " ｜ " + card.meaning);
         updatePlaybackState(false); playUrl(ttsUrl(seg.text, seg.lang));
     }
 
     private Segment nextFreeTextSegment() { if (segmentInCard >= segmentPlan.size()) return null; Segment seg = segmentPlan.get(segmentInCard); return seg.text != null && seg.text.trim().length() > 0 ? seg : null; }
-
-    private Segment nextPlayableSegment() {
-        int guard = 0;
-        while (guard++ < 80) {
-            if (cardIndex < 0 || cardIndex >= cards.size()) cardIndex = 0;
-            Card card = cards.get(cardIndex); ensurePlan(card);
-            if (segmentInCard >= segmentPlan.size()) { segmentInCard = 0; clearPlan(); cardIndex = (cardIndex + 1) % cards.size(); continue; }
-            Segment seg = segmentPlan.get(segmentInCard);
-            if (seg.text != null && seg.text.trim().length() > 0) return seg;
-            segmentInCard++;
-        }
-        return null;
-    }
-
+    private Segment nextPlayableSegment() { int guard = 0; while (guard++ < 80) { if (cardIndex < 0 || cardIndex >= cards.size()) cardIndex = 0; Card card = cards.get(cardIndex); ensurePlan(card); if (segmentInCard >= segmentPlan.size()) { segmentInCard = 0; clearPlan(); cardIndex = nextAutomaticCardIndex(); continue; } Segment seg = segmentPlan.get(segmentInCard); if (seg.text != null && seg.text.trim().length() > 0) return seg; segmentInCard++; } return null; }
+    private int nextAutomaticCardIndex() { if (!randomReadMode || cards.size() <= 1) return (cardIndex + 1) % cards.size(); int next = random.nextInt(cards.size()); if (next == cardIndex) next = (next + 1) % cards.size(); return next; }
     private void ensurePlan(Card card) { if (builtCardIndex == cardIndex && builtTrainingMode == trainingMode && !segmentPlan.isEmpty()) return; segmentPlan.clear(); builtCardIndex = cardIndex; builtTrainingMode = trainingMode; if (trainingMode) buildTrainingPlan(card); else buildNormalPlan(card); if (segmentPlan.isEmpty()) addSeg(spokenWord(card.front), deLang, "德语原声", speed); }
 
-    private void buildNormalPlan(Card card) {
-        String front = cleanGerman(card.front), word = spokenWord(front), cn = cleanChinese(card.meaning);
-        for (int i = 0; i < Math.max(0, deRepeat); i++) addSeg(word, deLang, "德语朗读", speed);
-        for (int i = 0; i < Math.max(1, spellCount); i++) addSeg(spellGerman(spellBase(front)), deLang, "拼读", spellSpeed);
-        for (int i = 0; i < Math.max(0, zhRepeat); i++) addSeg(cn, zhLang, "中文意思", zhSpeed);
-    }
-
-    private void buildTrainingPlan(Card card) {
-        String front = cleanGerman(card.front), word = spokenWord(front), cn = cleanChinese(card.meaning);
-        for (int i = 0; i < wordSlowCount; i++) addSeg(word, deLang, "慢速单词", wordSlowSpeed);
-        for (int i = 0; i < spellCount; i++) addSeg(spellGerman(spellBase(front)), deLang, "单词拼读", spellSpeed);
-        for (int i = 0; i < wordNormalCount; i++) addSeg(word, deLang, "正常单词", wordNormalSpeed);
-        for (int i = 0; i < meaningCount; i++) addSeg(cn, zhLang, "中文意思", zhSpeed);
-        Related rel = randomRelatedFor(card); String phrase = cleanGerman(rel.phrase), sentence = cleanGerman(rel.example), sentenceCn = cleanChinese(rel.exampleCn);
-        if (phrase.length() > 0) { addWordSpellPieces(phrase, "词块拆词", "词块拼读"); for (int i = 0; i < phraseCount; i++) addSeg(phrase, deLang, "慢速词块", phraseSpeed); }
-        if (sentence.length() > 0) { addWordSpellPieces(sentence, "句子拆词", "句子拼读"); for (int i = 0; i < sentenceCount; i++) addSeg(sentence, deLang, "慢速句子", sentenceSpeed); }
-        for (int i = 0; i < sentenceCnCount; i++) addSeg(sentenceCn, zhLang, "句子中文", zhSpeed);
-    }
-
+    private void buildNormalPlan(Card card) { String front = cleanGerman(card.front), word = spokenWord(front), cn = cleanChinese(card.meaning); for (int i = 0; i < Math.max(0, deRepeat); i++) addSeg(word, deLang, "德语朗读", speed); for (int i = 0; i < Math.max(1, spellCount); i++) addSeg(spellGerman(spellBase(front)), deLang, "拼读", spellSpeed); for (int i = 0; i < Math.max(0, zhRepeat); i++) addSeg(cn, zhLang, "中文意思", zhSpeed); }
+    private void buildTrainingPlan(Card card) { String front = cleanGerman(card.front), word = spokenWord(front), cn = cleanChinese(card.meaning); for (int i = 0; i < wordSlowCount; i++) addSeg(word, deLang, "慢速单词", wordSlowSpeed); for (int i = 0; i < spellCount; i++) addSeg(spellGerman(spellBase(front)), deLang, "单词拼读", spellSpeed); for (int i = 0; i < wordNormalCount; i++) addSeg(word, deLang, "正常单词", wordNormalSpeed); for (int i = 0; i < meaningCount; i++) addSeg(cn, zhLang, "中文意思", zhSpeed); Related rel = randomRelatedFor(card); String phrase = cleanGerman(rel.phrase), sentence = cleanGerman(rel.example), sentenceCn = cleanChinese(rel.exampleCn); if (phrase.length() > 0) { addWordSpellPieces(phrase, "词块拆词", "词块拼读"); for (int i = 0; i < phraseCount; i++) addSeg(phrase, deLang, "慢速词块", phraseSpeed); } if (sentence.length() > 0) { addWordSpellPieces(sentence, "句子拆词", "句子拼读"); for (int i = 0; i < sentenceCount; i++) addSeg(sentence, deLang, "慢速句子", sentenceSpeed); } for (int i = 0; i < sentenceCnCount; i++) addSeg(sentenceCn, zhLang, "句子中文", zhSpeed); }
     private void addWordSpellPieces(String text, String wordPhase, String spellPhase) { for (String w : wordsFrom(text)) { if (w.length() < 2 || isStopWord(w.toLowerCase())) continue; addSeg(spokenWord(w), deLang, wordPhase, wordSlowSpeed); addSeg(spellGerman(spellBase(w)), deLang, spellPhase, spellSpeed); } }
     private void addSeg(String text, String lang, String phase, float spd) { if (text != null && text.trim().length() > 0) segmentPlan.add(new Segment(text.trim(), lang, phase, spd)); }
+    private void notifyCardChanged(int cardId) { try { Intent i = new Intent(ACTION_CARD_CHANGED); i.setPackage(getPackageName()); i.putExtra("cardId", cardId); sendBroadcast(i); } catch (Exception ignored) {} }
 
     private Related randomRelatedFor(Card card) { String front = cleanGerman(card.front); if (front.length() == 0) return new Related("", card.example, card.exampleCn); if (!isSingleWordCard(card, front)) return new Related(front, card.example, card.exampleCn); String token = keyToken(front); if (token.length() == 0) return new Related("", card.example, card.exampleCn); List<Card> sameDeck = relatedCandidates(card, token, true); List<Card> pool = sameDeck.isEmpty() ? relatedCandidates(card, token, false) : sameDeck; if (!pool.isEmpty()) { Card picked = pool.get(random.nextInt(pool.size())); return new Related(cleanGerman(picked.front), picked.example, picked.exampleCn); } return new Related("", card.example, card.exampleCn); }
     private List<Card> relatedCandidates(Card card, String token, boolean sameDeckOnly) { List<Card> out = new ArrayList<>(); for (Card c : cards) { if (c == card) continue; if (sameDeckOnly && !safeEq(c.deck, card.deck)) continue; if (!isPhraseLike(c)) continue; if (containsToken(c.front, token) || containsToken(c.example, token)) out.add(c); } return out; }
@@ -221,11 +166,11 @@ public class PlaybackService extends Service {
 
     private void playUrl(String url) { releasePlayer(); try { player = new MediaPlayer(); try { player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK); } catch (Exception ignored) {} if (Build.VERSION.SDK_INT >= 21) player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()); player.setOnPreparedListener(mp -> { try { if (Build.VERSION.SDK_INT >= 23) { PlaybackParams params = mp.getPlaybackParams(); params.setSpeed(activeSpeed); mp.setPlaybackParams(params); } } catch (Exception ignored) {} paused = false; retryCount = 0; mp.start(); updatePlaybackState(false); }); player.setOnCompletionListener(mp -> advanceSegment()); player.setOnErrorListener((mp, what, extra) -> { if (retryCount < 2 && playing && !paused) { retryCount++; handler.postDelayed(this::playCurrentSegment, 600); } else { retryCount = 0; advanceSegment(); } return true; }); Map<String, String> headers = new HashMap<>(); headers.put("User-Agent", "Mozilla/5.0 Android GermanAnkiPlayer"); headers.put("Referer", "https://translate.google.com/"); player.setDataSource(this, Uri.parse(url), headers); player.prepareAsync(); } catch (Exception e) { advanceSegment(); } }
     private void advanceSegment() { if (!playing || paused) return; handler.removeCallbacksAndMessages(null); segmentInCard++; retryCount = 0; handler.postDelayed(this::playCurrentSegment, Math.max(0, gapMs)); }
-    private void nextCard() { freeTextMode = false; if (cards.isEmpty()) loadCardsIfNeeded(); if (!cards.isEmpty()) cardIndex = (cardIndex + 1) % cards.size(); segmentInCard = 0; clearPlan(); paused = false; playing = true; retryCount = 0; acquireWakeLock(); playCurrentSegment(); }
-    private void prevCard() { freeTextMode = false; if (cards.isEmpty()) loadCardsIfNeeded(); if (!cards.isEmpty()) cardIndex = (cardIndex - 1 + cards.size()) % cards.size(); segmentInCard = 0; clearPlan(); paused = false; playing = true; retryCount = 0; acquireWakeLock(); playCurrentSegment(); }
+    private void nextCard() { freeTextMode = false; randomReadMode = false; if (cards.isEmpty()) loadCardsIfNeeded(); if (!cards.isEmpty()) cardIndex = (cardIndex + 1) % cards.size(); segmentInCard = 0; clearPlan(); paused = false; playing = true; retryCount = 0; acquireWakeLock(); playCurrentSegment(); }
+    private void prevCard() { freeTextMode = false; randomReadMode = false; if (cards.isEmpty()) loadCardsIfNeeded(); if (!cards.isEmpty()) cardIndex = (cardIndex - 1 + cards.size()) % cards.size(); segmentInCard = 0; clearPlan(); paused = false; playing = true; retryCount = 0; acquireWakeLock(); playCurrentSegment(); }
     private void pausePlayback() { try { if (player != null && player.isPlaying()) player.pause(); } catch (Exception ignored) {} paused = true; playing = false; updateNotification("已暂停", freeTextMode ? freeTextTitle : currentText()); updatePlaybackState(true); }
     private void resumePlayback() { paused = false; playing = true; acquireWakeLock(); try { if (player != null) { player.start(); updateNotification("继续播放", freeTextMode ? freeTextTitle : currentText()); updatePlaybackState(false); } else playCurrentSegment(); } catch (Exception e) { playCurrentSegment(); } }
-    private void stopPlayback() { playing = false; paused = false; freeTextMode = false; releasePlayer(); handler.removeCallbacksAndMessages(null); releaseWakeLock(); stopForeground(true); stopSelf(); }
+    private void stopPlayback() { playing = false; paused = false; freeTextMode = false; randomReadMode = false; releasePlayer(); handler.removeCallbacksAndMessages(null); releaseWakeLock(); stopForeground(true); stopSelf(); }
     private void releasePlayer() { try { if (player != null) { player.setOnPreparedListener(null); player.setOnCompletionListener(null); player.setOnErrorListener(null); try { player.stop(); } catch (Exception ignored) {} player.release(); } } catch (Exception ignored) {} player = null; }
 
     private String currentText() { if (cards.isEmpty()) return ""; Card c = cards.get(Math.max(0, Math.min(cardIndex, cards.size() - 1))); return c.front + " ｜ " + c.meaning; }
