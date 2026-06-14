@@ -19,6 +19,9 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -36,6 +39,7 @@ public class PlaybackService extends Service {
 
     private static final int NOTIFICATION_ID = 1001;
     private static final String CHANNEL_ID = "german_anki_media";
+    private static final String ORIGINAL_HTML = "anki_german_b1_high_3000_speech_mode_fixed.html";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<Card> cards = new ArrayList<>();
@@ -116,6 +120,37 @@ public class PlaybackService extends Service {
 
     private void loadCardsIfNeeded() {
         if (!cards.isEmpty()) return;
+        loadCardsFromOriginalHtml();
+        if (cards.isEmpty()) loadCardsFromTsvFallback();
+    }
+
+    private void loadCardsFromOriginalHtml() {
+        try {
+            InputStream is = getAssets().open(ORIGINAL_HTML);
+            String html = readAll(is);
+            int marker = html.indexOf("const allCards");
+            if (marker < 0) return;
+            int start = html.indexOf('[', marker);
+            int end = html.indexOf("];", start);
+            if (start < 0 || end < 0 || end <= start) return;
+            String json = html.substring(start, end + 1);
+            JSONArray array = new JSONArray(json);
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject obj = array.optJSONObject(i);
+                if (obj == null) continue;
+                int id = obj.optInt("id", i + 1);
+                String front = obj.optString("front", "");
+                String meaning = obj.optString("meaning", "");
+                String deck = obj.optString("deck", "");
+                if (front.trim().length() == 0 && meaning.trim().length() == 0) continue;
+                cards.add(new Card(id, front, meaning, deck));
+            }
+        } catch (Exception e) {
+            cards.clear();
+        }
+    }
+
+    private void loadCardsFromTsvFallback() {
         try {
             InputStream is = getAssets().open("cards.tsv");
             String tsv = readAll(is);
@@ -146,7 +181,7 @@ public class PlaybackService extends Service {
         loadCardsIfNeeded();
         if (!playing || paused) return;
         if (cards.isEmpty()) {
-            updateNotification("没有卡片数据", "assets/cards.tsv 缺失");
+            updateNotification("没有卡片数据", "原版 HTML 未解析到 allCards");
             return;
         }
         int total = Math.max(1, deRepeat + zhRepeat);
