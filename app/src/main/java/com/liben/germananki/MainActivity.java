@@ -66,9 +66,9 @@ public class MainActivity extends Activity {
         String js = "(function(){"
                 + "if(document.getElementById('nativeApkBar')) return;"
                 + "var bar=document.createElement('div');bar.id='nativeApkBar';"
-                + "bar.style.cssText='position:fixed;left:10px;right:10px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:999999;display:flex;gap:8px;padding:8px;border-radius:20px;background:rgba(18,14,10,.82);backdrop-filter:blur(14px);box-shadow:0 14px 35px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12)';"
-                + "function btn(t,bg,color){var x=document.createElement(\"button\");x.textContent=t;x.style.cssText='flex:1;border:0;border-radius:999px;padding:11px 8px;font-weight:900;font-size:14px;background:'+bg+';color:'+color;return x;}"
-                + "var start=btn('原声息屏播放','linear-gradient(135deg,#fff2d0,#ffc76f)','#24170e');var stop=btn('停止','rgba(255,255,255,.14)','#fff4df');"
+                + "bar.style.cssText='position:fixed;right:8px;top:calc(92px + env(safe-area-inset-top));z-index:999999;display:flex;flex-direction:column;gap:6px;pointer-events:none';"
+                + "function btn(t,bg,color){var x=document.createElement(\"button\");x.textContent=t;x.style.cssText='width:58px;height:34px;border:0;border-radius:999px;padding:0;font-weight:900;font-size:12px;letter-spacing:-.05em;box-shadow:0 8px 18px rgba(0,0,0,.28);opacity:.88;backdrop-filter:blur(10px);pointer-events:auto;background:'+bg+';color:'+color;return x;}"
+                + "var start=btn('息屏','linear-gradient(135deg,#fff2d0,#ffc76f)','#24170e');var stop=btn('停止','rgba(20,16,12,.70)','#fff4df');"
                 + "start.onclick=function(){var i=1,o={deRepeat:2,zhRepeat:1,gapMs:500,speed:'0.9',deLang:'de',zhLang:'zh-CN'};try{if(typeof index!==\"undefined\")i=index+1;if(typeof getNativeOptions===\"function\")o=getNativeOptions();}catch(e){} NativePlayer.startWithOptions(i,o.deRepeat,o.zhRepeat,o.gapMs,''+o.speed,o.deLang,o.zhLang);};"
                 + "stop.onclick=function(){NativePlayer.stop();};bar.appendChild(start);bar.appendChild(stop);document.body.appendChild(bar);"
                 + "})();";
