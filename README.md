@@ -20,7 +20,7 @@
 
 `app-debug.apk`
 
-手机下载后安装即可。首次安装需要允许“安装未知来源应用”。
+手机下载安装即可。首次安装需要允许“安装未知来源应用”。
 
 ## 使用
 
@@ -58,4 +58,4 @@
 2. 在系统设置里把本 App 的电池优化设为“不限制”。
 3. 播放时保持联网。
 
-Build trigger: 2026-06-14-android-apk
+Build trigger: 2026-06-14-current-card-noun-settings-ui
