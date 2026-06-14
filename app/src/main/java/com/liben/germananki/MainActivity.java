@@ -9,26 +9,23 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.view.Gravity;
-import android.view.View;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.TextView;
+import android.view.ViewGroup;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.Toast;
 
 public class MainActivity extends Activity {
-    private EditText deRepeatInput;
-    private EditText zhRepeatInput;
-    private EditText speedInput;
-    private EditText startInput;
-    private EditText gapInput;
+    private WebView webView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestNotificationPermission();
-        buildUi();
+        buildWebUi();
     }
 
     private void requestNotificationPermission() {
@@ -37,110 +34,71 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void buildUi() {
-        ScrollView scrollView = new ScrollView(this);
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(34, 34, 34, 44);
+    private void buildWebUi() {
+        FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(20, 16, 12));
-        scrollView.addView(root);
 
-        TextView title = new TextView(this);
-        title.setText("德语 Anki 播放器");
-        title.setTextColor(Color.rgb(255, 247, 231));
-        title.setTextSize(28);
-        title.setGravity(Gravity.CENTER_HORIZONTAL);
-        title.setPadding(0, 8, 0, 12);
-        root.addView(title);
+        webView = new WebView(this);
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(true);
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setAllowUniversalAccessFromFileURLs(true);
+        if (Build.VERSION.SDK_INT >= 21) {
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
 
-        TextView tip = new TextView(this);
-        tip.setText("这是原生 Android 播放器。开始播放后会进入前台媒体服务，通知栏常驻，息屏后继续播放。播放时需要联网。首次使用请允许通知权限，并把本 App 电池优化设为不限制。");
-        tip.setTextColor(Color.rgb(235, 219, 195));
-        tip.setTextSize(15);
-        tip.setLineSpacing(2, 1.08f);
-        tip.setPadding(0, 0, 0, 18);
-        root.addView(tip);
+        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                injectNativeControls();
+            }
+        });
+        webView.addJavascriptInterface(new NativeBridge(), "NativePlayer");
 
-        deRepeatInput = addInput(root, "德语读几遍", "2");
-        zhRepeatInput = addInput(root, "中文读几遍", "1");
-        speedInput = addInput(root, "播放速度，例如 0.85 / 1.0 / 1.2", "0.9");
-        gapInput = addInput(root, "卡片间隔毫秒，例如 500", "500");
-        startInput = addInput(root, "从第几张开始", "1");
+        root.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        setContentView(root);
 
-        Button start = addButton(root, "开始息屏播放", true);
-        start.setOnClickListener(v -> startPlayback());
-
-        Button pause = addButton(root, "暂停", false);
-        pause.setOnClickListener(v -> sendCommand(PlaybackService.ACTION_PAUSE));
-
-        Button resume = addButton(root, "继续", false);
-        resume.setOnClickListener(v -> sendCommand(PlaybackService.ACTION_RESUME));
-
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, 10, 0, 0);
-        root.addView(row);
-
-        Button prev = new Button(this);
-        prev.setText("上一张");
-        prev.setOnClickListener(v -> sendCommand(PlaybackService.ACTION_PREV));
-        row.addView(prev, new LinearLayout.LayoutParams(0, 120, 1));
-
-        Button next = new Button(this);
-        next.setText("下一张");
-        next.setOnClickListener(v -> sendCommand(PlaybackService.ACTION_NEXT));
-        row.addView(next, new LinearLayout.LayoutParams(0, 120, 1));
-
-        Button stop = addButton(root, "停止播放", false);
-        stop.setOnClickListener(v -> sendCommand(PlaybackService.ACTION_STOP));
-
-        Button battery = addButton(root, "打开电池设置", false);
-        battery.setOnClickListener(v -> openBatterySettings());
-
-        setContentView(scrollView);
+        webView.loadUrl("file:///android_asset/index.html");
     }
 
-    private EditText addInput(LinearLayout root, String label, String value) {
-        TextView tv = new TextView(this);
-        tv.setText(label);
-        tv.setTextColor(Color.rgb(255, 231, 190));
-        tv.setTextSize(15);
-        tv.setPadding(0, 12, 0, 6);
-        root.addView(tv);
-
-        EditText input = new EditText(this);
-        input.setText(value);
-        input.setTextColor(Color.WHITE);
-        input.setTextSize(18);
-        input.setSingleLine(true);
-        input.setSelectAllOnFocus(true);
-        input.setPadding(22, 8, 22, 8);
-        input.setBackgroundColor(Color.rgb(48, 39, 30));
-        root.addView(input, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 110));
-        return input;
+    private void injectNativeControls() {
+        String js =
+                "(function(){"
+                        + "if(document.getElementById('nativeApkBar')) return;"
+                        + "var bar=document.createElement('div');"
+                        + "bar.id='nativeApkBar';"
+                        + "bar.style.cssText='position:fixed;left:10px;right:10px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:999999;display:flex;gap:8px;padding:8px;border-radius:20px;background:rgba(18,14,10,.82);backdrop-filter:blur(14px);box-shadow:0 14px 35px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12)';"
+                        + "function btn(t,bg,color){var x=document.createElement(\"button\");x.textContent=t;x.style.cssText='flex:1;border:0;border-radius:999px;padding:11px 8px;font-weight:900;font-size:14px;background:'+bg+';color:'+color;return x;}"
+                        + "var start=btn('原生息屏播放','linear-gradient(135deg,#fff2d0,#ffc76f)','#24170e');"
+                        + "var stop=btn('停止','rgba(255,255,255,.14)','#fff4df');"
+                        + "start.onclick=function(){var i=1;try{if(typeof index!==\"undefined\") i=index+1;}catch(e){} NativePlayer.start(i);};"
+                        + "stop.onclick=function(){NativePlayer.stop();};"
+                        + "bar.appendChild(start);bar.appendChild(stop);document.body.appendChild(bar);"
+                        + "document.body.style.paddingBottom='84px';"
+                        + "})();";
+        if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(js, null);
+        else webView.loadUrl("javascript:" + js);
     }
 
-    private Button addButton(LinearLayout root, String text, boolean primary) {
-        Button button = new Button(this);
-        button.setText(text);
-        button.setTextSize(18);
-        button.setAllCaps(false);
-        if (primary) button.setTextColor(Color.rgb(37, 26, 17));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 126);
-        lp.setMargins(0, 16, 0, 0);
-        root.addView(button, lp);
-        return button;
-    }
-
-    private void startPlayback() {
+    private void startNativePlayback(int startIndexOneBased) {
         Intent intent = new Intent(this, PlaybackService.class);
         intent.setAction(PlaybackService.ACTION_START);
-        intent.putExtra("deRepeat", parseInt(deRepeatInput.getText().toString(), 2));
-        intent.putExtra("zhRepeat", parseInt(zhRepeatInput.getText().toString(), 1));
-        intent.putExtra("startIndex", Math.max(0, parseInt(startInput.getText().toString(), 1) - 1));
-        intent.putExtra("gapMs", Math.max(0, parseInt(gapInput.getText().toString(), 500)));
-        intent.putExtra("speed", parseFloat(speedInput.getText().toString(), 0.9f));
+        intent.putExtra("deRepeat", 2);
+        intent.putExtra("zhRepeat", 1);
+        intent.putExtra("startIndex", Math.max(0, startIndexOneBased - 1));
+        intent.putExtra("gapMs", 500);
+        intent.putExtra("speed", 0.9f);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent); else startService(intent);
+        Toast.makeText(this, "已启动原生息屏播放", Toast.LENGTH_SHORT).show();
     }
 
     private void sendCommand(String action) {
@@ -149,12 +107,10 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent); else startService(intent);
     }
 
-    private int parseInt(String value, int fallback) {
-        try { return Integer.parseInt(value.trim()); } catch (Exception e) { return fallback; }
-    }
-
-    private float parseFloat(String value, float fallback) {
-        try { return Float.parseFloat(value.trim()); } catch (Exception e) { return fallback; }
+    @Override
+    public void onBackPressed() {
+        if (webView != null && webView.canGoBack()) webView.goBack();
+        else super.onBackPressed();
     }
 
     private void openBatterySettings() {
@@ -164,6 +120,23 @@ public class MainActivity extends Activity {
             startActivity(intent);
         } catch (Exception e) {
             startActivity(new Intent(Settings.ACTION_SETTINGS));
+        }
+    }
+
+    public class NativeBridge {
+        @JavascriptInterface
+        public void start(int startIndexOneBased) {
+            runOnUiThread(() -> startNativePlayback(startIndexOneBased));
+        }
+
+        @JavascriptInterface
+        public void stop() {
+            runOnUiThread(() -> sendCommand(PlaybackService.ACTION_STOP));
+        }
+
+        @JavascriptInterface
+        public void battery() {
+            runOnUiThread(() -> openBatterySettings());
         }
     }
 }
