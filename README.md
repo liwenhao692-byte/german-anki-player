@@ -58,4 +58,4 @@
 2. 在系统设置里把本 App 的电池优化设为“不限制”。
 3. 播放时保持联网。
 
-Build trigger: 2026-06-14-current-card-noun-settings-ui
+Build trigger: 2026-06-15-gear-only-repeat-counts
