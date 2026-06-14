@@ -8,22 +8,22 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioAttributes;
-import android.media.MediaPlayer;
-import android.media.PlaybackParams;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
-import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 
 public class PlaybackService extends Service {
     public static final String ACTION_START = "com.liben.germananki.START";
@@ -38,10 +38,16 @@ public class PlaybackService extends Service {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<Card> cards = new ArrayList<>();
-    private MediaPlayer player;
+
     private MediaSession mediaSession;
+    private TextToSpeech tts;
+    private PowerManager.WakeLock wakeLock;
+
     private boolean foregroundStarted = false;
     private boolean paused = false;
+    private boolean playing = false;
+    private boolean ttsReady = false;
+    private boolean pendingPlay = false;
 
     private int cardIndex = 0;
     private int segmentInCard = 0;
@@ -56,6 +62,8 @@ public class PlaybackService extends Service {
         createChannel();
         createMediaSession();
         loadCardsIfNeeded();
+        createWakeLock();
+        initTts();
     }
 
     @Override
@@ -72,6 +80,8 @@ public class PlaybackService extends Service {
             cardIndex = Math.max(0, Math.min(intent.getIntExtra("startIndex", 0), Math.max(0, cards.size() - 1)));
             segmentInCard = 0;
             paused = false;
+            playing = true;
+            acquireWakeLock();
             playCurrentSegment();
         } else if (ACTION_PAUSE.equals(action)) {
             pausePlayback();
@@ -94,13 +104,54 @@ public class PlaybackService extends Service {
 
     @Override
     public void onDestroy() {
-        releasePlayer();
+        handler.removeCallbacksAndMessages(null);
+        stopTts();
+        if (tts != null) {
+            try { tts.shutdown(); } catch (Exception ignored) {}
+            tts = null;
+        }
         if (mediaSession != null) {
             mediaSession.setActive(false);
             mediaSession.release();
+            mediaSession = null;
         }
-        handler.removeCallbacksAndMessages(null);
+        releaseWakeLock();
         super.onDestroy();
+    }
+
+    private void initTts() {
+        tts = new TextToSpeech(this, status -> {
+            ttsReady = status == TextToSpeech.SUCCESS;
+            if (ttsReady) {
+                try {
+                    if (Build.VERSION.SDK_INT >= 21) {
+                        tts.setAudioAttributes(new AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build());
+                    }
+                    tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                        @Override public void onStart(String utteranceId) {}
+                        @Override public void onDone(String utteranceId) {
+                            handler.post(() -> {
+                                if (playing && !paused) advanceSegment();
+                            });
+                        }
+                        @Override public void onError(String utteranceId) {
+                            handler.post(() -> {
+                                if (playing && !paused) advanceSegment();
+                            });
+                        }
+                    });
+                } catch (Exception ignored) {}
+                if (pendingPlay) {
+                    pendingPlay = false;
+                    handler.post(this::playCurrentSegment);
+                }
+            } else {
+                updateNotification("系统 TTS 初始化失败", "请安装/启用系统文字转语音引擎");
+            }
+        });
     }
 
     private void loadCardsIfNeeded() {
@@ -137,65 +188,66 @@ public class PlaybackService extends Service {
             updateNotification("没有卡片数据", "assets/cards.tsv 缺失");
             return;
         }
+        if (!ttsReady || tts == null) {
+            pendingPlay = true;
+            updateNotification("系统 TTS 准备中", "稍等几秒");
+            return;
+        }
+        if (!playing || paused) return;
+
         int total = Math.max(1, deRepeat + zhRepeat);
         if (segmentInCard >= total) {
             segmentInCard = 0;
             cardIndex = (cardIndex + 1) % cards.size();
         }
+
         Card card = cards.get(cardIndex);
         boolean german = segmentInCard < deRepeat;
         String text = german ? cleanGerman(card.front) : cleanChinese(card.meaning);
-        String lang = german ? "de" : "zh-CN";
         String phase = german ? "德语" : "中文";
         if (text.length() == 0) {
             advanceSegment();
             return;
         }
+
         String title = (cardIndex + 1) + " / " + cards.size() + " · " + phase;
         String sub = card.front + " ｜ " + card.meaning;
         updateNotification(title, sub);
         updatePlaybackState(false);
-        playUrl(ttsUrl(text, lang));
+        speakText(text, german);
     }
 
-    private void playUrl(String url) {
-        releasePlayer();
+    private void speakText(String text, boolean german) {
         try {
-            player = new MediaPlayer();
-            if (Build.VERSION.SDK_INT >= 21) {
-                player.setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build());
+            Locale locale = german ? Locale.GERMANY : Locale.SIMPLIFIED_CHINESE;
+            int lang = tts.setLanguage(locale);
+            tts.setSpeechRate(speed);
+            tts.setPitch(1.0f);
+            if (lang == TextToSpeech.LANG_MISSING_DATA || lang == TextToSpeech.LANG_NOT_SUPPORTED) {
+                updateNotification("缺少语音包", german ? "请安装德语 TTS 语音包" : "请安装中文 TTS 语音包");
+                handler.postDelayed(this::advanceSegment, 900);
+                return;
             }
-            player.setOnPreparedListener(mp -> {
-                try {
-                    if (Build.VERSION.SDK_INT >= 23) {
-                        PlaybackParams params = mp.getPlaybackParams();
-                        params.setSpeed(speed);
-                        mp.setPlaybackParams(params);
-                    }
-                } catch (Exception ignored) {}
-                paused = false;
-                mp.start();
-                updatePlaybackState(false);
-            });
-            player.setOnCompletionListener(mp -> advanceSegment());
-            player.setOnErrorListener((mp, what, extra) -> {
-                advanceSegment();
-                return true;
-            });
-            Map<String, String> headers = new HashMap<>();
-            headers.put("User-Agent", "Mozilla/5.0 Android GermanAnkiPlayer");
-            headers.put("Referer", "https://translate.google.com/");
-            player.setDataSource(this, Uri.parse(url), headers);
-            player.prepareAsync();
+            String utteranceId = "u_" + System.currentTimeMillis() + "_" + cardIndex + "_" + segmentInCard;
+            if (Build.VERSION.SDK_INT >= 21) {
+                Bundle params = new Bundle();
+                tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
+            } else {
+                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null);
+                handler.postDelayed(this::advanceSegment, estimateDurationMs(text));
+            }
         } catch (Exception e) {
-            advanceSegment();
+            handler.postDelayed(this::advanceSegment, 700);
         }
     }
 
+    private int estimateDurationMs(String text) {
+        int len = Math.max(1, text.length());
+        return Math.max(900, Math.min(6000, (int)(len * 180 / Math.max(0.55f, speed))));
+    }
+
     private void advanceSegment() {
+        if (!playing || paused) return;
         handler.removeCallbacksAndMessages(null);
         segmentInCard++;
         handler.postDelayed(this::playCurrentSegment, Math.max(0, gapMs));
@@ -206,6 +258,9 @@ public class PlaybackService extends Service {
         if (!cards.isEmpty()) cardIndex = (cardIndex + 1) % cards.size();
         segmentInCard = 0;
         paused = false;
+        playing = true;
+        acquireWakeLock();
+        stopTts();
         playCurrentSegment();
     }
 
@@ -214,51 +269,63 @@ public class PlaybackService extends Service {
         if (!cards.isEmpty()) cardIndex = (cardIndex - 1 + cards.size()) % cards.size();
         segmentInCard = 0;
         paused = false;
+        playing = true;
+        acquireWakeLock();
+        stopTts();
         playCurrentSegment();
     }
 
     private void pausePlayback() {
-        try {
-            if (player != null && player.isPlaying()) player.pause();
-            paused = true;
-            updateNotification("已暂停", currentText());
-            updatePlaybackState(true);
-        } catch (Exception ignored) {}
+        paused = true;
+        playing = false;
+        stopTts();
+        updateNotification("已暂停", currentText());
+        updatePlaybackState(true);
     }
 
     private void resumePlayback() {
-        try {
-            if (player != null) {
-                player.start();
-                paused = false;
-                updateNotification("继续播放", currentText());
-                updatePlaybackState(false);
-            } else {
-                playCurrentSegment();
-            }
-        } catch (Exception e) {
-            playCurrentSegment();
-        }
+        paused = false;
+        playing = true;
+        acquireWakeLock();
+        updateNotification("继续播放", currentText());
+        updatePlaybackState(false);
+        playCurrentSegment();
     }
 
     private void stopPlayback() {
-        releasePlayer();
-        handler.removeCallbacksAndMessages(null);
+        playing = false;
         paused = false;
+        handler.removeCallbacksAndMessages(null);
+        stopTts();
+        releaseWakeLock();
         stopForeground(true);
         stopSelf();
     }
 
-    private void releasePlayer() {
+    private void stopTts() {
+        try { if (tts != null) tts.stop(); } catch (Exception ignored) {}
+    }
+
+    private void createWakeLock() {
         try {
-            if (player != null) {
-                player.setOnPreparedListener(null);
-                player.setOnCompletionListener(null);
-                player.setOnErrorListener(null);
-                player.release();
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GermanAnkiPlayer:SpeechWakeLock");
+                wakeLock.setReferenceCounted(false);
             }
         } catch (Exception ignored) {}
-        player = null;
+    }
+
+    private void acquireWakeLock() {
+        try {
+            if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(6 * 60 * 60 * 1000L);
+        } catch (Exception ignored) {}
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Exception ignored) {}
     }
 
     private String currentText() {
@@ -289,16 +356,6 @@ public class PlaybackService extends Service {
     private String cleanChinese(String s) {
         if (s == null) return "";
         return s.replace(';', '，').replace('；', '，').replace('/', '，').replace('|', '，').trim();
-    }
-
-    private String ttsUrl(String text, String lang) {
-        Uri uri = Uri.parse("https://translate.google.com/translate_tts").buildUpon()
-                .appendQueryParameter("ie", "UTF-8")
-                .appendQueryParameter("client", "tw-ob")
-                .appendQueryParameter("tl", lang)
-                .appendQueryParameter("q", text)
-                .build();
-        return uri.toString();
     }
 
     private void createChannel() {
