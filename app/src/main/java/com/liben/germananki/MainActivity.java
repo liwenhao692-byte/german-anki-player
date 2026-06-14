@@ -64,13 +64,19 @@ public class MainActivity extends Activity {
 
     private void injectNativeControls() {
         String js = "(function(){"
-                + "if(document.getElementById('nativeApkBar')) return;"
-                + "var bar=document.createElement('div');bar.id='nativeApkBar';"
-                + "bar.style.cssText='position:fixed;right:8px;top:calc(92px + env(safe-area-inset-top));z-index:999999;display:flex;flex-direction:column;gap:6px;pointer-events:none';"
-                + "function btn(t,bg,color){var x=document.createElement(\"button\");x.textContent=t;x.style.cssText='width:58px;height:34px;border:0;border-radius:999px;padding:0;font-weight:900;font-size:12px;letter-spacing:-.05em;box-shadow:0 8px 18px rgba(0,0,0,.28);opacity:.88;backdrop-filter:blur(10px);pointer-events:auto;background:'+bg+';color:'+color;return x;}"
-                + "var start=btn('息屏','linear-gradient(135deg,#fff2d0,#ffc76f)','#24170e');var stop=btn('停止','rgba(20,16,12,.70)','#fff4df');"
-                + "start.onclick=function(){var i=1,o={deRepeat:2,zhRepeat:1,gapMs:500,speed:'0.9',deLang:'de',zhLang:'zh-CN'};try{if(typeof index!==\"undefined\")i=index+1;if(typeof getNativeOptions===\"function\")o=getNativeOptions();}catch(e){} NativePlayer.startWithOptions(i,o.deRepeat,o.zhRepeat,o.gapMs,''+o.speed,o.deLang,o.zhLang);};"
-                + "stop.onclick=function(){NativePlayer.stop();};bar.appendChild(start);bar.appendChild(stop);document.body.appendChild(bar);"
+                + "if(document.getElementById('nativeApkDot')) return;"
+                + "var running=false,moved=false,sx=0,sy=0,ox=0,oy=0;"
+                + "function word(){try{if(typeof allCards!=='undefined'&&typeof index!=='undefined'&&allCards[index])return allCards[index].front||allCards[index].word||'';}catch(e){} return '';}"
+                + "function opts(){var o={deRepeat:2,zhRepeat:1,gapMs:500,speed:'0.9',deLang:'de',zhLang:'zh-CN'};try{if(typeof getNativeOptions==='function')o=getNativeOptions();}catch(e){} return o;}"
+                + "function currentIndex(){try{if(typeof index!=='undefined')return index+1;}catch(e){} return 1;}"
+                + "function flash(t){var x=document.getElementById('nativeApkToast');if(!x){x=document.createElement('div');x.id='nativeApkToast';x.style.cssText='position:fixed;left:50%;top:calc(12px + env(safe-area-inset-top));transform:translateX(-50%);z-index:1000000;max-width:72vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:999px;padding:7px 11px;background:rgba(18,14,10,.76);color:#fff4df;font-size:12px;font-weight:900;box-shadow:0 8px 20px rgba(0,0,0,.25);opacity:0;transition:.18s;pointer-events:none';document.body.appendChild(x);}x.textContent=t;x.style.opacity='.92';clearTimeout(x._tm);x._tm=setTimeout(function(){x.style.opacity='0'},1200);}"
+                + "var d=document.createElement('button');d.id='nativeApkDot';d.textContent='读';"
+                + "d.style.cssText='position:fixed;right:6px;top:48%;z-index:999999;width:42px;height:42px;border:0;border-radius:50%;background:rgba(255,231,180,.90);color:#251a11;font-size:13px;font-weight:950;box-shadow:0 8px 18px rgba(0,0,0,.30);opacity:.72;backdrop-filter:blur(10px);touch-action:none;padding:0';"
+                + "d.onclick=function(e){if(moved){moved=false;return;}var o=opts();if(!running){NativePlayer.startWithOptions(currentIndex(),o.deRepeat,o.zhRepeat,o.gapMs,''+o.speed,o.deLang,o.zhLang);running=true;d.textContent='停';d.style.background='rgba(22,18,14,.78)';d.style.color='#fff4df';flash('朗读：'+word());}else{NativePlayer.stop();running=false;d.textContent='读';d.style.background='rgba(255,231,180,.90)';d.style.color='#251a11';flash('已停止');}};"
+                + "d.ontouchstart=function(e){var t=e.touches[0];sx=t.clientX;sy=t.clientY;var r=d.getBoundingClientRect();ox=r.left;oy=r.top;moved=false;};"
+                + "d.ontouchmove=function(e){var t=e.touches[0],dx=t.clientX-sx,dy=t.clientY-sy;if(Math.abs(dx)+Math.abs(dy)>5)moved=true;var x=Math.max(2,Math.min(innerWidth-44,ox+dx));var y=Math.max(40,Math.min(innerHeight-50,oy+dy));d.style.left=x+'px';d.style.top=y+'px';d.style.right='auto';};"
+                + "d.ontouchend=function(){if(!moved)return;var r=d.getBoundingClientRect();if(r.left<innerWidth/2){d.style.left='6px';d.style.right='auto';}else{d.style.right='6px';d.style.left='auto';}};"
+                + "document.body.appendChild(d);"
                 + "})();";
         if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(js, null); else webView.loadUrl("javascript:" + js);
     }
@@ -86,7 +92,7 @@ public class MainActivity extends Activity {
         intent.putExtra("deLang", cleanLang(deLang, "de"));
         intent.putExtra("zhLang", cleanLang(zhLang, "zh-CN"));
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent); else startService(intent);
-        Toast.makeText(this, "已启动原声息屏播放", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "已从当前单词开始朗读", Toast.LENGTH_SHORT).show();
     }
 
     private void sendCommand(String action) {
