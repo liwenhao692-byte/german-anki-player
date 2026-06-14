@@ -49,6 +49,7 @@ public class PlaybackService extends Service {
     private boolean foregroundStarted = false;
     private boolean paused = false;
     private boolean playing = false;
+    private boolean spellMode = false;
 
     private int cardIndex = 0;
     private int segmentInCard = 0;
@@ -82,6 +83,7 @@ public class PlaybackService extends Service {
             speed = clamp(intent.getFloatExtra("speed", 0.9f), 0.55f, 1.6f);
             deLang = cleanLang(intent.getStringExtra("deLang"), "de");
             zhLang = cleanLang(intent.getStringExtra("zhLang"), "zh-CN");
+            spellMode = intent.getBooleanExtra("spellMode", false);
             cardIndex = Math.max(0, Math.min(intent.getIntExtra("startIndex", 0), Math.max(0, cards.size() - 1)));
             segmentInCard = 0;
             retryCount = 0;
@@ -184,16 +186,46 @@ public class PlaybackService extends Service {
             updateNotification("没有卡片数据", "原版 HTML 未解析到 allCards");
             return;
         }
-        int total = Math.max(1, deRepeat + zhRepeat);
-        if (segmentInCard >= total) {
-            segmentInCard = 0;
-            cardIndex = (cardIndex + 1) % cards.size();
-        }
+
         Card card = cards.get(cardIndex);
-        boolean german = segmentInCard < deRepeat;
-        String text = german ? cleanGerman(card.front) : cleanChinese(card.meaning);
-        String lang = german ? deLang : zhLang;
-        String phase = german ? "德语原声" : "中文原声";
+        String text;
+        String lang;
+        String phase;
+
+        if (spellMode) {
+            int normalCount = Math.max(1, deRepeat);
+            int total = normalCount + 1 + Math.max(0, zhRepeat);
+            if (segmentInCard >= total) {
+                segmentInCard = 0;
+                cardIndex = (cardIndex + 1) % cards.size();
+                card = cards.get(cardIndex);
+            }
+            if (segmentInCard < normalCount) {
+                text = cleanGerman(card.front);
+                lang = deLang;
+                phase = "德语单词";
+            } else if (segmentInCard == normalCount) {
+                text = spellGerman(card.front);
+                lang = deLang;
+                phase = "单词拼读";
+            } else {
+                text = cleanChinese(card.meaning);
+                lang = zhLang;
+                phase = "中文释义";
+            }
+        } else {
+            int total = Math.max(1, deRepeat + zhRepeat);
+            if (segmentInCard >= total) {
+                segmentInCard = 0;
+                cardIndex = (cardIndex + 1) % cards.size();
+                card = cards.get(cardIndex);
+            }
+            boolean german = segmentInCard < deRepeat;
+            text = german ? cleanGerman(card.front) : cleanChinese(card.meaning);
+            lang = german ? deLang : zhLang;
+            phase = german ? "德语原声" : "中文原声";
+        }
+
         if (text.length() == 0) {
             advanceSegment();
             return;
@@ -351,6 +383,23 @@ public class PlaybackService extends Service {
                 .replaceAll("\\s*[|/]\\s*", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
+    }
+
+    private String spellGerman(String s) {
+        String base = cleanGerman(s);
+        if (base.length() == 0) return "";
+        StringBuilder spelled = new StringBuilder();
+        for (int i = 0; i < base.length(); i++) {
+            char ch = base.charAt(i);
+            if (!Character.isLetterOrDigit(ch)) continue;
+            String part;
+            if (ch == 'ß') part = "Eszett";
+            else part = String.valueOf(ch).toLowerCase();
+            if (spelled.length() > 0) spelled.append(", ");
+            spelled.append(part);
+        }
+        if (spelled.length() == 0) return base;
+        return base + ". " + spelled + ". " + base + ".";
     }
 
     private String cleanChinese(String s) {
