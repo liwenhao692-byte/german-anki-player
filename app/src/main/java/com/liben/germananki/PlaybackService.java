@@ -107,8 +107,7 @@ public class PlaybackService extends Service {
         return START_STICKY;
     }
 
-    @Override
-    public IBinder onBind(Intent intent) { return null; }
+    @Override public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public void onDestroy() {
@@ -137,8 +136,7 @@ public class PlaybackService extends Service {
             int start = html.indexOf('[', marker);
             int end = html.indexOf("];", start);
             if (start < 0 || end < 0 || end <= start) return;
-            String json = html.substring(start, end + 1);
-            JSONArray array = new JSONArray(json);
+            JSONArray array = new JSONArray(html.substring(start, end + 1));
             for (int i = 0; i < array.length(); i++) {
                 JSONObject obj = array.optJSONObject(i);
                 if (obj == null) continue;
@@ -160,8 +158,7 @@ public class PlaybackService extends Service {
     private void loadCardsFromTsvFallback() {
         try {
             InputStream is = getAssets().open("cards.tsv");
-            String tsv = readAll(is);
-            String[] lines = tsv.split("\\n");
+            String[] lines = readAll(is).split("\\n");
             for (String line : lines) {
                 if (line.trim().isEmpty()) continue;
                 String[] p = line.split("\\t", -1);
@@ -191,18 +188,14 @@ public class PlaybackService extends Service {
             updateNotification("没有卡片数据", "原版 HTML 未解析到 allCards");
             return;
         }
-
         Segment seg = nextPlayableSegment();
         if (seg == null || seg.text.length() == 0) {
             updateNotification("没有可播放内容", "当前卡片缺少文本");
             return;
         }
-
         activeSpeed = seg.speed;
-        String title = (cardIndex + 1) + " / " + cards.size() + " · " + seg.phase;
         Card card = cards.get(cardIndex);
-        String sub = card.front + " ｜ " + card.meaning;
-        updateNotification(title, sub);
+        updateNotification((cardIndex + 1) + " / " + cards.size() + " · " + seg.phase, card.front + " ｜ " + card.meaning);
         updatePlaybackState(false);
         playUrl(ttsUrl(seg.text, seg.lang));
     }
@@ -232,30 +225,74 @@ public class PlaybackService extends Service {
     }
 
     private Segment segmentForFullSpell(Card card, int segIndex) {
+        Related rel = relatedFor(card);
         String word = cleanGerman(card.front);
         String letters = spellGerman(card.front);
         String cn = cleanChinese(card.meaning);
-        String phrase = phraseText(card);
-        String sentence = cleanGerman(card.example);
-        String sentenceCn = cleanChinese(card.exampleCn);
+        String phrase = rel.phrase;
+        String sentence = cleanGerman(rel.example);
+        String sentenceCn = cleanChinese(rel.exampleCn);
 
         if (segIndex <= 2) return new Segment(word, deLang, "慢速单词", 0.62f, false);
         if (segIndex <= 4) return new Segment(letters, deLang, "单词拼读", 0.72f, false);
         if (segIndex <= 7) return new Segment(word, deLang, "正常单词", speed, false);
         if (segIndex == 8) return new Segment(cn, zhLang, "中文意思", speed, false);
-        if (segIndex == 9) return new Segment(phrase, deLang, "词块", speed, false);
-        if (segIndex == 10) return new Segment(sentence, deLang, "句子", speed, false);
+        if (segIndex == 9) return new Segment(phrase, deLang, "相关词块", speed, false);
+        if (segIndex == 10) return new Segment(sentence, deLang, "相关句子", speed, false);
         if (segIndex == 11) return new Segment(sentenceCn, zhLang, "句子中文", speed, false);
         return Segment.end();
     }
 
-    private String phraseText(Card card) {
+    private Related relatedFor(Card card) {
         String front = cleanGerman(card.front);
-        if (front.length() == 0) return "";
-        if (!"单词".equals(card.pos)) return front;
-        if (front.indexOf(' ') >= 0) return front;
-        return "";
+        if (front.length() == 0) return new Related("", card.example, card.exampleCn);
+        if (!"单词".equals(card.pos) || front.indexOf(' ') >= 0) {
+            return new Related(front, card.example, card.exampleCn);
+        }
+        String token = keyToken(front);
+        if (token.length() == 0) return new Related("", card.example, card.exampleCn);
+        Card best = findRelated(card, token, true);
+        if (best == null) best = findRelated(card, token, false);
+        if (best != null) return new Related(cleanGerman(best.front), best.example, best.exampleCn);
+        return new Related("", card.example, card.exampleCn);
     }
+
+    private Card findRelated(Card card, String token, boolean sameDeckOnly) {
+        for (Card c : cards) {
+            if (c == card) continue;
+            if (sameDeckOnly && !safeEq(c.deck, card.deck)) continue;
+            if (!isPhraseLike(c)) continue;
+            if (containsToken(c.front, token)) return c;
+        }
+        return null;
+    }
+
+    private boolean isPhraseLike(Card c) {
+        String front = cleanGerman(c.front);
+        if (front.length() == 0) return false;
+        return "词块".equals(c.pos) || "句型".equals(c.pos) || front.indexOf(' ') >= 0;
+    }
+
+    private boolean containsToken(String text, String token) {
+        String t = cleanGerman(text).toLowerCase();
+        return t.equals(token) || t.contains(" " + token) || t.contains(token + " ") || t.contains(token);
+    }
+
+    private String keyToken(String front) {
+        String[] parts = cleanGerman(front).toLowerCase().split("[^a-zäöüßA-ZÄÖÜ]+");
+        String best = "";
+        for (String p : parts) {
+            if (p.length() < 3 || isStopWord(p)) continue;
+            if (p.length() > best.length()) best = p;
+        }
+        return best;
+    }
+
+    private boolean isStopWord(String s) {
+        return s.equals("sich") || s.equals("mit") || s.equals("auf") || s.equals("für") || s.equals("aus") || s.equals("von") || s.equals("bei") || s.equals("nach") || s.equals("über") || s.equals("unter") || s.equals("durch") || s.equals("ohne") || s.equals("gegen") || s.equals("jemand") || s.equals("jemanden") || s.equals("jemandem") || s.equals("etwas");
+    }
+
+    private boolean safeEq(String a, String b) { return a != null && a.equals(b); }
 
     private void playUrl(String url) {
         releasePlayer();
@@ -263,10 +300,7 @@ public class PlaybackService extends Service {
             player = new MediaPlayer();
             try { player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK); } catch (Exception ignored) {}
             if (Build.VERSION.SDK_INT >= 21) {
-                player.setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build());
+                player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
             }
             player.setOnPreparedListener(mp -> {
                 try {
@@ -388,21 +422,7 @@ public class PlaybackService extends Service {
 
     private String cleanGerman(String s) {
         if (s == null) return "";
-        return s.replaceAll("\\([^)]*\\)", " ")
-                .replace("…", "")
-                .replace("...", "")
-                .replaceAll("\\s*\\+\\s*(Akk|Dat|Gen|Nom)\\.?", " ")
-                .replace("jmdn.", "jemanden")
-                .replace("jdn.", "jemanden")
-                .replace("jmdm.", "jemandem")
-                .replace("jmd.", "jemand")
-                .replace("etw.", "etwas")
-                .replace("z.B.", "zum Beispiel")
-                .replace("CAD", "C A D")
-                .replace("WG", "W G")
-                .replaceAll("\\s*[|/]\\s*", " ")
-                .replaceAll("\\s+", " ")
-                .trim();
+        return s.replaceAll("\\([^)]*\\)", " ").replace("…", "").replace("...", "").replaceAll("\\s*\\+\\s*(Akk|Dat|Gen|Nom)\\.?", " ").replace("jmdn.", "jemanden").replace("jdn.", "jemanden").replace("jmdm.", "jemandem").replace("jmd.", "jemand").replace("etw.", "etwas").replace("z.B.", "zum Beispiel").replace("CAD", "C A D").replace("WG", "W G").replaceAll("\\s*[|/]\\s*", " ").replaceAll("\\s+", " ").trim();
     }
 
     private String spellGerman(String s) {
@@ -412,9 +432,7 @@ public class PlaybackService extends Service {
         for (int i = 0; i < base.length(); i++) {
             char ch = base.charAt(i);
             if (!Character.isLetterOrDigit(ch)) continue;
-            String part;
-            if (ch == 'ß') part = "Eszett";
-            else part = String.valueOf(ch).toLowerCase();
+            String part = ch == 'ß' ? "Eszett" : String.valueOf(ch).toLowerCase();
             if (spelled.length() > 0) spelled.append(", ");
             spelled.append(part);
         }
@@ -427,13 +445,7 @@ public class PlaybackService extends Service {
     }
 
     private String ttsUrl(String text, String lang) {
-        Uri uri = Uri.parse("https://translate.google.com/translate_tts").buildUpon()
-                .appendQueryParameter("ie", "UTF-8")
-                .appendQueryParameter("client", "tw-ob")
-                .appendQueryParameter("tl", lang)
-                .appendQueryParameter("q", text)
-                .build();
-        return uri.toString();
+        return Uri.parse("https://translate.google.com/translate_tts").buildUpon().appendQueryParameter("ie", "UTF-8").appendQueryParameter("client", "tw-ob").appendQueryParameter("tl", lang).appendQueryParameter("q", text).build().toString();
     }
 
     private String cleanLang(String value, String fallback) {
@@ -452,13 +464,8 @@ public class PlaybackService extends Service {
         } catch (Exception ignored) {}
     }
 
-    private void acquireWakeLock() {
-        try { if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(6 * 60 * 60 * 1000L); } catch (Exception ignored) {}
-    }
-
-    private void releaseWakeLock() {
-        try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {}
-    }
+    private void acquireWakeLock() { try { if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(6 * 60 * 60 * 1000L); } catch (Exception ignored) {} }
+    private void releaseWakeLock() { try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {} }
 
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
@@ -491,28 +498,11 @@ public class PlaybackService extends Service {
         createMediaSession();
         Intent openIntent = new Intent(this, MainActivity.class);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, openIntent, pendingFlags());
-
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL_ID) : new Notification.Builder(this);
-        builder.setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setContentIntent(contentIntent)
-                .setOngoing(!paused)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false)
-                .addAction(android.R.drawable.ic_media_previous, "上一张", serviceIntent(ACTION_PREV))
-                .addAction(paused ? android.R.drawable.ic_media_play : android.R.drawable.ic_media_pause, paused ? "继续" : "暂停", serviceIntent(paused ? ACTION_RESUME : ACTION_PAUSE))
-                .addAction(android.R.drawable.ic_media_next, "下一张", serviceIntent(ACTION_NEXT))
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", serviceIntent(ACTION_STOP));
-        if (Build.VERSION.SDK_INT >= 21) {
-            builder.setStyle(new Notification.MediaStyle()
-                    .setMediaSession(mediaSession.getSessionToken())
-                    .setShowActionsInCompactView(0, 1, 2));
-        }
+        builder.setSmallIcon(android.R.drawable.ic_media_play).setContentTitle(title).setContentText(text).setContentIntent(contentIntent).setOngoing(!paused).setOnlyAlertOnce(true).setShowWhen(false).addAction(android.R.drawable.ic_media_previous, "上一张", serviceIntent(ACTION_PREV)).addAction(paused ? android.R.drawable.ic_media_play : android.R.drawable.ic_media_pause, paused ? "继续" : "暂停", serviceIntent(paused ? ACTION_RESUME : ACTION_PAUSE)).addAction(android.R.drawable.ic_media_next, "下一张", serviceIntent(ACTION_NEXT)).addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", serviceIntent(ACTION_STOP));
+        if (Build.VERSION.SDK_INT >= 21) builder.setStyle(new Notification.MediaStyle().setMediaSession(mediaSession.getSessionToken()).setShowActionsInCompactView(0, 1, 2));
         Notification notification = builder.build();
-        if (!foregroundStarted) {
-            startForeground(NOTIFICATION_ID, notification);
-        } else {
+        if (!foregroundStarted) startForeground(NOTIFICATION_ID, notification); else {
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) manager.notify(NOTIFICATION_ID, notification);
         }
@@ -533,48 +523,28 @@ public class PlaybackService extends Service {
     private void updatePlaybackState(boolean isPaused) {
         if (mediaSession == null) return;
         int state = isPaused ? PlaybackState.STATE_PAUSED : PlaybackState.STATE_PLAYING;
-        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_STOP |
-                PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
-        mediaSession.setPlaybackState(new PlaybackState.Builder()
-                .setActions(actions)
-                .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, isPaused ? 0f : activeSpeed)
-                .build());
+        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_STOP | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+        mediaSession.setPlaybackState(new PlaybackState.Builder().setActions(actions).setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, isPaused ? 0f : activeSpeed).build());
     }
 
     private float clamp(float v, float min, float max) { return Math.max(min, Math.min(max, v)); }
 
     private static class Segment {
-        final String text;
-        final String lang;
-        final String phase;
+        final String text, lang, phase;
         final float speed;
         final boolean endOfCard;
-        Segment(String text, String lang, String phase, float speed, boolean endOfCard) {
-            this.text = text == null ? "" : text;
-            this.lang = lang;
-            this.phase = phase;
-            this.speed = speed;
-            this.endOfCard = endOfCard;
-        }
+        Segment(String text, String lang, String phase, float speed, boolean endOfCard) { this.text = text == null ? "" : text; this.lang = lang; this.phase = phase; this.speed = speed; this.endOfCard = endOfCard; }
         static Segment end() { return new Segment("", "", "", 1f, true); }
+    }
+
+    private static class Related {
+        final String phrase, example, exampleCn;
+        Related(String phrase, String example, String exampleCn) { this.phrase = phrase == null ? "" : phrase; this.example = example == null ? "" : example; this.exampleCn = exampleCn == null ? "" : exampleCn; }
     }
 
     private static class Card {
         final int id;
-        final String front;
-        final String meaning;
-        final String deck;
-        final String pos;
-        final String example;
-        final String exampleCn;
-        Card(int id, String front, String meaning, String deck, String pos, String example, String exampleCn) {
-            this.id = id;
-            this.front = front;
-            this.meaning = meaning;
-            this.deck = deck;
-            this.pos = pos;
-            this.example = example;
-            this.exampleCn = exampleCn;
-        }
+        final String front, meaning, deck, pos, example, exampleCn;
+        Card(int id, String front, String meaning, String deck, String pos, String example, String exampleCn) { this.id = id; this.front = front; this.meaning = meaning; this.deck = deck; this.pos = pos; this.example = example; this.exampleCn = exampleCn; }
     }
 }
