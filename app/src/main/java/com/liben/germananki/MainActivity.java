@@ -19,6 +19,7 @@ import android.widget.FrameLayout;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
+    private static final String ORIGINAL_HTML = "anki_german_b1_high_3000_speech_mode_fixed.html";
     private WebView webView;
 
     @Override
@@ -36,7 +37,7 @@ public class MainActivity extends Activity {
 
     private void buildWebUi() {
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(20, 16, 12));
+        root.setBackgroundColor(Color.rgb(16, 13, 10));
 
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
@@ -58,7 +59,7 @@ public class MainActivity extends Activity {
 
         root.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
-        webView.loadUrl("file:///android_asset/index.html");
+        webView.loadUrl("file:///android_asset/" + ORIGINAL_HTML);
     }
 
     private void injectNativeControls() {
@@ -69,7 +70,7 @@ public class MainActivity extends Activity {
                 + "function btn(t,bg,color){var x=document.createElement(\"button\");x.textContent=t;x.style.cssText='flex:1;border:0;border-radius:999px;padding:11px 8px;font-weight:900;font-size:14px;background:'+bg+';color:'+color;return x;}"
                 + "var start=btn('原声息屏播放','linear-gradient(135deg,#fff2d0,#ffc76f)','#24170e');var stop=btn('停止','rgba(255,255,255,.14)','#fff4df');"
                 + "start.onclick=function(){var i=1,o={deRepeat:2,zhRepeat:1,gapMs:500,speed:'0.9',deLang:'de',zhLang:'zh-CN'};try{if(typeof index!==\"undefined\")i=index+1;if(typeof getNativeOptions===\"function\")o=getNativeOptions();}catch(e){} NativePlayer.startWithOptions(i,o.deRepeat,o.zhRepeat,o.gapMs,''+o.speed,o.deLang,o.zhLang);};"
-                + "stop.onclick=function(){NativePlayer.stop();};bar.appendChild(start);bar.appendChild(stop);document.body.appendChild(bar);document.body.style.paddingBottom='84px';"
+                + "stop.onclick=function(){NativePlayer.stop();};bar.appendChild(start);bar.appendChild(stop);document.body.appendChild(bar);"
                 + "})();";
         if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(js, null); else webView.loadUrl("javascript:" + js);
     }
