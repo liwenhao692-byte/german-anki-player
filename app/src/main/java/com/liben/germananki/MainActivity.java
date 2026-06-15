@@ -153,7 +153,7 @@ public class MainActivity extends Activity {
         intent.putExtra("sentenceCount", sentenceCount);
         intent.putExtra("sentenceCnCount", sentenceCnCount);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent); else startService(intent);
-        Toast.makeText(this, randomReadMode ? "已启动随机组合" : (trainingMode ? "已启动训练模式" : "已启动朗读"), Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, randomReadMode ? "已启动随机组合" : (trainingMode ? "已启动训练模式" : "已启动自定义朗读"), Toast.LENGTH_SHORT).show();
     }
 
     private void startFreeTextPlayback(String text, String lang, float speed, int repeat, int gapMs) {
@@ -196,7 +196,10 @@ public class MainActivity extends Activity {
     public class NativeBridge {
         @JavascriptInterface public void startWithOptions(int startIndexOneBased, int deRepeat, int zhRepeat, int gapMs, String speed, String deLang, String zhLang) {
             float s = parseSpeed(speed);
-            runOnUiThread(() -> startNativePlayback(startIndexOneBased, deRepeat, zhRepeat, gapMs, s, deLang, zhLang, false, false, .62f, .72f, s, .62f, .62f, .78f, 3, 2, 3, 1, 1, 1, 1));
+            runOnUiThread(() -> startNativePlayback(startIndexOneBased, deRepeat, zhRepeat, gapMs, s, deLang, zhLang, false, false, .62f, .72f, s, .62f, .62f, .78f, 0, 2, deRepeat, zhRepeat, 0, 0, 0));
+        }
+        @JavascriptInterface public void startCustomReadWithConfig(int startIndexOneBased, int gapMs, String deLang, String zhLang, String wordNormal, String spell, String phrase, String sentence, String zh, int wordNormalCount, int spellCount, int meaningCount, int phraseCount, int sentenceCount, int sentenceCnCount) {
+            runOnUiThread(() -> startNativePlayback(startIndexOneBased, wordNormalCount, meaningCount, gapMs, parseSpeed(wordNormal), deLang, zhLang, false, false, 0.62f, parseSpeed(spell), parseSpeed(wordNormal), parseSpeed(phrase), parseSpeed(sentence), parseSpeed(zh), 0, spellCount, wordNormalCount, meaningCount, phraseCount, sentenceCount, sentenceCnCount));
         }
         @JavascriptInterface public void startTrainingWithConfig(int startIndexOneBased, int gapMs, String deLang, String zhLang, String wordSlow, String spell, String wordNormal, String phrase, String sentence, String zh, int wordSlowCount, int spellCount, int wordNormalCount, int meaningCount, int phraseCount, int sentenceCount, int sentenceCnCount) {
             runOnUiThread(() -> startNativePlayback(startIndexOneBased, 2, 1, gapMs, parseSpeed(wordNormal), deLang, zhLang, true, false, parseSpeed(wordSlow), parseSpeed(spell), parseSpeed(wordNormal), parseSpeed(phrase), parseSpeed(sentence), parseSpeed(zh), wordSlowCount, spellCount, wordNormalCount, meaningCount, phraseCount, sentenceCount, sentenceCnCount));
