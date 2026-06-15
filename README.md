@@ -58,4 +58,4 @@
 2. 在系统设置里把本 App 的电池优化设为“不限制”。
 3. 播放时保持联网。
 
-Build trigger: 2026-06-15-system-tts-screen-off-interval-fix
+Build trigger: 2026-06-15-restore-online-voice-screen-off-locks
