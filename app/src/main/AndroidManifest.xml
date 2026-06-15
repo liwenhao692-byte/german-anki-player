@@ -10,6 +10,8 @@
 
     <application
         android:label="德语Anki播放器"
+        android:icon="@drawable/ic_launcher_de"
+        android:roundIcon="@drawable/ic_launcher_de"
         android:theme="@style/AppTheme">
         <activity
             android:name=".MainActivity"
