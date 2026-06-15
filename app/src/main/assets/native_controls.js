@@ -1,17 +1,12 @@
 (function () {
   if (document.getElementById('nativeGearOnly')) return;
 
-  let moved = false;
-  let sx = 0;
-  let sy = 0;
-  let ox = 0;
-  let oy = 0;
-  let playing = false;
+  let moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
 
   const cfg = {
     gap: 500,
-    sp: { wordSlow: 0.62, spell: 0.72, wordNormal: 0.90, phrase: 0.62, sentence: 0.62, zh: 0.78 },
-    ct: { wordSlow: 3, spell: 2, wordNormal: 3, meaning: 1, phrase: 1, sentence: 1, sentenceCn: 1 },
+    sp: { wordSlow: 0.62, spell: 0.72, wordNormal: 0.90, phrase: 0.72, sentence: 0.72, zh: 0.78 },
+    ct: { wordSlow: 3, spell: 1, wordNormal: 2, meaning: 1, phrase: 0, sentence: 0, sentenceCn: 0 },
     txt: { text: '', lang: 'de', speed: 0.90, repeat: 1 }
   };
 
@@ -23,9 +18,7 @@
     if (saved.gap) cfg.gap = saved.gap;
   } catch (e) {}
 
-  function save() {
-    localStorage.nativeTrainConfig = JSON.stringify(cfg);
-  }
+  function save() { localStorage.nativeTrainConfig = JSON.stringify(cfg); }
 
   function currentCardObj() {
     try {
@@ -89,9 +82,7 @@
 
   function opts() {
     let o = { deLang: 'de', zhLang: 'zh-CN', speed: '0.9' };
-    try {
-      if (typeof getNativeOptions === 'function') o = getNativeOptions();
-    } catch (e) {}
+    try { if (typeof getNativeOptions === 'function') o = getNativeOptions(); } catch (e) {}
     return o;
   }
 
@@ -126,32 +117,12 @@
 
   sheet.addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
   sheet.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
-  cover.addEventListener('touchmove', function (e) {
-    if (!sheet.contains(e.target)) e.preventDefault();
-  }, { passive: false });
+  cover.addEventListener('touchmove', function (e) { if (!sheet.contains(e.target)) e.preventDefault(); }, { passive: false });
 
-  function lockPage() {
-    document.body.style.overflow = 'hidden';
-    document.documentElement.style.overflow = 'hidden';
-  }
-
-  function unlockPage() {
-    document.body.style.overflow = '';
-    document.documentElement.style.overflow = '';
-  }
-
-  function openSheet() {
-    render();
-    sheet.style.height = Math.floor(window.innerHeight * 0.86) + 'px';
-    cover.style.display = 'flex';
-    lockPage();
-    setTimeout(() => { sheet.scrollTop = 0; }, 0);
-  }
-
-  function closeSheet() {
-    cover.style.display = 'none';
-    unlockPage();
-  }
+  function lockPage() { document.body.style.overflow = 'hidden'; document.documentElement.style.overflow = 'hidden'; }
+  function unlockPage() { document.body.style.overflow = ''; document.documentElement.style.overflow = ''; }
+  function openSheet() { render(); sheet.style.height = Math.floor(window.innerHeight * 0.86) + 'px'; cover.style.display = 'flex'; lockPage(); setTimeout(() => { sheet.scrollTop = 0; }, 0); }
+  function closeSheet() { cover.style.display = 'none'; unlockPage(); }
 
   function btn(t) {
     const b = document.createElement('button');
@@ -167,6 +138,13 @@
     sheet.appendChild(x);
   }
 
+  function note(t) {
+    const x = document.createElement('div');
+    x.textContent = t;
+    x.style.cssText = 'font-size:12px;line-height:1.45;color:#cdbb9e;margin:4px 0 10px';
+    sheet.appendChild(x);
+  }
+
   function row(title, key, type, min, max, step) {
     const r = document.createElement('div');
     r.style.cssText = 'display:grid;grid-template-columns:1fr 42px 52px 42px;gap:7px;align-items:center;margin:8px 0';
@@ -178,21 +156,16 @@
     const p = btn('+');
     v.style.cssText = 'text-align:center;font-size:13px;font-weight:950;color:#ffe1a3';
     function draw() { v.textContent = type === 'sp' ? cfg.sp[key].toFixed(2) : cfg.ct[key]; }
-    m.onclick = function () {
-      if (type === 'sp') cfg.sp[key] = Math.max(min, +(cfg.sp[key] - step).toFixed(2));
-      else cfg.ct[key] = Math.max(min, cfg.ct[key] - step);
-      save();
-      draw();
-    };
-    p.onclick = function () {
-      if (type === 'sp') cfg.sp[key] = Math.min(max, +(cfg.sp[key] + step).toFixed(2));
-      else cfg.ct[key] = Math.min(max, cfg.ct[key] + step);
-      save();
-      draw();
-    };
+    m.onclick = function () { if (type === 'sp') cfg.sp[key] = Math.max(min, +(cfg.sp[key] - step).toFixed(2)); else cfg.ct[key] = Math.max(min, cfg.ct[key] - step); save(); draw(); };
+    p.onclick = function () { if (type === 'sp') cfg.sp[key] = Math.min(max, +(cfg.sp[key] + step).toFixed(2)); else cfg.ct[key] = Math.min(max, cfg.ct[key] + step); save(); draw(); };
     draw();
     r.append(lab, m, v, p);
     sheet.appendChild(r);
+  }
+
+  function callCustomRead() {
+    const o = opts();
+    NativePlayer.startCustomReadWithConfig(currentId(), cfg.gap, o.deLang, o.zhLang, '' + cfg.sp.wordNormal, '' + cfg.sp.spell, '' + cfg.sp.phrase, '' + cfg.sp.sentence, '' + cfg.sp.zh, cfg.ct.wordNormal, cfg.ct.spell, cfg.ct.meaning, cfg.ct.phrase, cfg.ct.sentence, cfg.ct.sentenceCn);
   }
 
   function render() {
@@ -209,24 +182,19 @@
 
     const actions = document.createElement('div');
     actions.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0 8px';
-    const normal = btn('朗读+拼读');
+    const normal = btn('自定义朗读');
     normal.style.height = '44px';
-    normal.onclick = function () {
-      const o = opts();
-      NativePlayer.startWithOptions(currentId(), 2, 1, cfg.gap, '' + (o.speed || .9), o.deLang, o.zhLang);
-      playing = true;
-      flash('朗读：' + currentWord());
-      closeSheet();
-    };
+    normal.onclick = function () { callCustomRead(); flash('朗读：' + currentWord()); closeSheet(); };
+
     const train = btn('完整训练');
     train.style.height = '44px';
     train.onclick = function () {
       const o = opts();
       NativePlayer.startTrainingWithConfig(currentId(), cfg.gap, o.deLang, o.zhLang, '' + cfg.sp.wordSlow, '' + cfg.sp.spell, '' + cfg.sp.wordNormal, '' + cfg.sp.phrase, '' + cfg.sp.sentence, '' + cfg.sp.zh, cfg.ct.wordSlow, cfg.ct.spell, cfg.ct.wordNormal, cfg.ct.meaning, cfg.ct.phrase, cfg.ct.sentence, cfg.ct.sentenceCn);
-      playing = true;
       flash('训练：' + currentWord());
       closeSheet();
     };
+
     const random = btn('随机组合');
     random.style.height = '44px';
     random.onclick = function () {
@@ -234,7 +202,6 @@
       const id = randomCardId();
       window.nativeJumpToCardId(id);
       NativePlayer.startRandomTrainingWithConfig(id, cfg.gap, o.deLang, o.zhLang, '' + cfg.sp.wordSlow, '' + cfg.sp.spell, '' + cfg.sp.wordNormal, '' + cfg.sp.phrase, '' + cfg.sp.sentence, '' + cfg.sp.zh, cfg.ct.wordSlow, cfg.ct.spell, cfg.ct.wordNormal, cfg.ct.meaning, cfg.ct.phrase, cfg.ct.sentence, cfg.ct.sentenceCn);
-      playing = true;
       flash('随机组合');
       closeSheet();
     };
@@ -243,25 +210,54 @@
 
     const stop = btn('停止');
     stop.style.cssText += ';width:100%;height:40px;margin-bottom:10px';
-    stop.onclick = function () {
-      NativePlayer.stop();
-      playing = false;
-      flash('已停止');
-      closeSheet();
-    };
+    stop.onclick = function () { NativePlayer.stop(); flash('已停止'); closeSheet(); };
     sheet.appendChild(stop);
+
+    smallTitle('自定义朗读次数');
+    note('这里控制“自定义朗读”。词块/句子调成 0 就不读，不会像完整训练那样自动拆词。');
+    row('单词次数', 'wordNormal', 'ct', 0, 10, 1);
+    row('拼读次数', 'spell', 'ct', 0, 10, 1);
+    row('中文意思次数', 'meaning', 'ct', 0, 10, 1);
+    row('词块次数', 'phrase', 'ct', 0, 10, 1);
+    row('句子次数', 'sentence', 'ct', 0, 10, 1);
+    row('句子中文次数', 'sentenceCn', 'ct', 0, 10, 1);
+
+    smallTitle('速度');
+    row('单词慢速', 'wordSlow', 'sp', .4, 1.3, .05);
+    row('拼读速度', 'spell', 'sp', .4, 1.3, .05);
+    row('单词正常', 'wordNormal', 'sp', .45, 1.6, .05);
+    row('词块速度', 'phrase', 'sp', .4, 1.3, .05);
+    row('句子速度', 'sentence', 'sp', .4, 1.3, .05);
+    row('中文速度', 'zh', 'sp', .45, 1.5, .05);
+
+    smallTitle('完整训练次数');
+    note('完整训练会读慢速单词、拆词、拼读、词块、句子，适合精听。嫌慢就用上面的自定义朗读。');
+    row('慢速单词次数', 'wordSlow', 'ct', 0, 10, 1);
+
+    smallTitle('间隔');
+    const gapRow = document.createElement('div');
+    gapRow.style.cssText = 'display:grid;grid-template-columns:1fr 42px 70px 42px;gap:7px;align-items:center;margin:8px 0';
+    const gapLab = document.createElement('div');
+    gapLab.textContent = '每段间隔 ms';
+    gapLab.style.cssText = 'font-size:13px;font-weight:850;color:#fff0d0';
+    const gapMinus = btn('-');
+    const gapVal = document.createElement('div');
+    gapVal.style.cssText = 'text-align:center;font-size:13px;font-weight:950;color:#ffe1a3';
+    const gapPlus = btn('+');
+    function drawGap() { gapVal.textContent = cfg.gap; }
+    gapMinus.onclick = function () { cfg.gap = Math.max(0, cfg.gap - 100); save(); drawGap(); };
+    gapPlus.onclick = function () { cfg.gap = Math.min(5000, cfg.gap + 100); save(); drawGap(); };
+    drawGap();
+    gapRow.append(gapLab, gapMinus, gapVal, gapPlus);
+    sheet.appendChild(gapRow);
 
     smallTitle('输入文本朗读');
     const ta = document.createElement('textarea');
     ta.value = cfg.txt.text || '';
     ta.placeholder = '在这里输入德语、中文或英文，点下面按钮朗读';
     ta.style.cssText = 'box-sizing:border-box;width:100%;height:96px;border:1px solid rgba(255,225,163,.25);border-radius:16px;background:#241a13;color:#fff4df;font-size:14px;line-height:1.45;padding:10px;outline:none;resize:vertical';
-    ta.oninput = function () {
-      cfg.txt.text = ta.value;
-      save();
-    };
+    ta.oninput = function () { cfg.txt.text = ta.value; save(); };
     sheet.appendChild(ta);
-
     const textActions = document.createElement('div');
     textActions.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:8px 0 12px';
     const readDe = btn('读德语');
@@ -272,24 +268,6 @@
     readEn.onclick = function () { readText(ta, 'en', cfg.sp.wordNormal, '英文朗读'); };
     textActions.append(readDe, readZh, readEn);
     sheet.appendChild(textActions);
-
-    smallTitle('速度');
-    row('单词慢速', 'wordSlow', 'sp', .4, 1.3, .05);
-    row('拼读速度', 'spell', 'sp', .4, 1.3, .05);
-    row('单词正常', 'wordNormal', 'sp', .45, 1.6, .05);
-    row('词块速度', 'phrase', 'sp', .4, 1.3, .05);
-    row('句子速度', 'sentence', 'sp', .4, 1.3, .05);
-    row('中文速度', 'zh', 'sp', .45, 1.5, .05);
-
-    smallTitle('次数');
-    row('单词慢速次数', 'wordSlow', 'ct', 0, 10, 1);
-    row('拼读次数', 'spell', 'ct', 0, 10, 1);
-    row('单词正常次数', 'wordNormal', 'ct', 0, 10, 1);
-    row('中文意思次数', 'meaning', 'ct', 0, 10, 1);
-    row('词块整体次数', 'phrase', 'ct', 0, 10, 1);
-    row('句子整体次数', 'sentence', 'ct', 0, 10, 1);
-    row('句子中文次数', 'sentenceCn', 'ct', 0, 10, 1);
-
     const bottom = document.createElement('div');
     bottom.style.cssText = 'height:40px';
     sheet.appendChild(bottom);
@@ -297,44 +275,16 @@
 
   function readText(ta, lang, spd, label) {
     const t = ta.value.trim();
-    if (!t) {
-      flash('先输入文本');
-      return;
-    }
+    if (!t) { flash('先输入文本'); return; }
     cfg.txt.text = t;
     cfg.txt.lang = lang;
     save();
     NativePlayer.speakText(t, lang, '' + spd, Math.max(1, cfg.txt.repeat || 1), cfg.gap);
-    playing = true;
     flash(label);
     closeSheet();
   }
 
-  gear.onclick = function () {
-    if (moved) {
-      moved = false;
-      return;
-    }
-    openSheet();
-  };
-
-  gear.ontouchstart = function (e) {
-    const t = e.touches[0];
-    const r = gear.getBoundingClientRect();
-    sx = t.clientX;
-    sy = t.clientY;
-    ox = r.left;
-    oy = r.top;
-    moved = false;
-  };
-
-  gear.ontouchmove = function (e) {
-    const t = e.touches[0];
-    const dx = t.clientX - sx;
-    const dy = t.clientY - sy;
-    if (Math.abs(dx) + Math.abs(dy) > 5) moved = true;
-    gear.style.left = Math.max(4, Math.min(innerWidth - 42, ox + dx)) + 'px';
-    gear.style.top = Math.max(40, Math.min(innerHeight - 60, oy + dy)) + 'px';
-    gear.style.right = 'auto';
-  };
+  gear.onclick = function () { if (moved) { moved = false; return; } openSheet(); };
+  gear.ontouchstart = function (e) { const t = e.touches[0]; const r = gear.getBoundingClientRect(); sx = t.clientX; sy = t.clientY; ox = r.left; oy = r.top; moved = false; };
+  gear.ontouchmove = function (e) { const t = e.touches[0]; const dx = t.clientX - sx; const dy = t.clientY - sy; if (Math.abs(dx) + Math.abs(dy) > 5) moved = true; gear.style.left = Math.max(4, Math.min(innerWidth - 42, ox + dx)) + 'px'; gear.style.top = Math.max(40, Math.min(innerHeight - 60, oy + dy)) + 'px'; gear.style.right = 'auto'; };
 })();
