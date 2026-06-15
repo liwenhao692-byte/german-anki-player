@@ -36,6 +36,38 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Patch custom normal read plan
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/liben/germananki/PlaybackService.java')
+          s = p.read_text()
+          old = '''        if (!full) {
+              for (int i = 0; i < deRepeat; i++) add(out, word, deLang, "德语朗读", speed);
+              for (int i = 0; i < Math.max(1, spellCount); i++) add(out, spellGerman(spellBase(front)), deLang, "拼读", spellSpeed);
+              for (int i = 0; i < zhRepeat; i++) add(out, cn, zhLang, "中文意思", zhSpeed);
+              return out;
+          }
+          '''
+          old = old.replace('          ', '        ')
+          new = '''        if (!full) {
+              Related r = randomRelatedFor(c);
+              String phrase = cleanGerman(r.phrase), sentence = cleanGerman(r.example), sentenceCn = cleanChinese(r.exampleCn);
+              for (int i = 0; i < wordNormalCount; i++) add(out, word, deLang, "单词", wordNormalSpeed);
+              for (int i = 0; i < spellCount; i++) add(out, spellGerman(spellBase(front)), deLang, "拼读", spellSpeed);
+              for (int i = 0; i < meaningCount; i++) add(out, cn, zhLang, "中文意思", zhSpeed);
+              if (phrase.length() > 0) for (int i = 0; i < phraseCount; i++) add(out, phrase, deLang, "词块", phraseSpeed);
+              if (sentence.length() > 0) for (int i = 0; i < sentenceCount; i++) add(out, sentence, deLang, "句子", sentenceSpeed);
+              if (sentenceCn.length() > 0) for (int i = 0; i < sentenceCnCount; i++) add(out, sentenceCn, zhLang, "句子中文", zhSpeed);
+              return out;
+          }
+          '''
+          new = new.replace('          ', '        ')
+          if old not in s:
+              raise SystemExit('normal read plan patch target not found')
+          p.write_text(s.replace(old, new))
+          PY
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
