@@ -1,0 +1,5 @@
+rebuild custom read settings and online tts voice
+
+- force new APK build
+- verify custom read settings are included
+- no Android system TextToSpeech
