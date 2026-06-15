@@ -12,6 +12,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.util.Base64;
 import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -21,8 +22,10 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.zip.GZIPInputStream;
 
 public class MainActivity extends Activity {
     private static final String ORIGINAL_HTML = "anki_german_b1_high_3000_speech_mode_fixed.html";
@@ -55,8 +58,7 @@ public class MainActivity extends Activity {
     }
 
     private void jumpToCard(int id) {
-        String js = "try{window.nativeJumpToCardId&&window.nativeJumpToCardId(" + id + ");}catch(e){}";
-        if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(js, null); else webView.loadUrl("javascript:" + js);
+        evalJs("try{window.nativeJumpToCardId&&window.nativeJumpToCardId(" + id + ");}catch(e){}");
     }
 
     private void requestNotificationPermission() {
@@ -89,15 +91,34 @@ public class MainActivity extends Activity {
 
     private void injectNativeControls() {
         try {
-            String js = readAsset("native_controls.js");
-            if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(js, null); else webView.loadUrl("javascript:" + js);
+            String patch = readPatchJs();
+            if (patch.length() > 0) evalJs(patch);
+            evalJs(readAsset("native_controls.js"));
         } catch (Exception e) {
             Toast.makeText(this, "设置面板加载失败", Toast.LENGTH_SHORT).show();
         }
     }
 
+    private void evalJs(String js) {
+        if (webView == null || js == null) return;
+        if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(js, null); else webView.loadUrl("javascript:" + js);
+    }
+
+    private String readPatchJs() {
+        try {
+            StringBuilder b64 = new StringBuilder();
+            for (int i = 0; i <= 8; i++) b64.append(readAsset(String.format("manual_patch_%02d.b64", i)));
+            byte[] gz = Base64.decode(b64.toString(), Base64.DEFAULT);
+            return readStream(new GZIPInputStream(new ByteArrayInputStream(gz)));
+        } catch (Exception e) { return ""; }
+    }
+
     private String readAsset(String name) throws Exception {
         InputStream is = getAssets().open(name);
+        return readStream(is);
+    }
+
+    private String readStream(InputStream is) throws Exception {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
         int n;
@@ -162,9 +183,7 @@ public class MainActivity extends Activity {
             Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
             intent.setData(Uri.parse("package:" + getPackageName()));
             startActivity(intent);
-        } catch (Exception e) {
-            startActivity(new Intent(Settings.ACTION_SETTINGS));
-        }
+        } catch (Exception e) { startActivity(new Intent(Settings.ACTION_SETTINGS)); }
     }
 
     private float parseSpeed(String value) {
@@ -172,28 +191,20 @@ public class MainActivity extends Activity {
         catch (Exception e) { return 0.9f; }
     }
 
-    private String cleanLang(String value, String fallback) {
-        return value == null || value.trim().length() == 0 ? fallback : value.trim();
-    }
+    private String cleanLang(String value, String fallback) { return value == null || value.trim().length() == 0 ? fallback : value.trim(); }
 
     public class NativeBridge {
         @JavascriptInterface public void startWithOptions(int startIndexOneBased, int deRepeat, int zhRepeat, int gapMs, String speed, String deLang, String zhLang) {
             float s = parseSpeed(speed);
             runOnUiThread(() -> startNativePlayback(startIndexOneBased, deRepeat, zhRepeat, gapMs, s, deLang, zhLang, false, false, .62f, .72f, s, .62f, .62f, .78f, 3, 2, 3, 1, 1, 1, 1));
         }
-
         @JavascriptInterface public void startTrainingWithConfig(int startIndexOneBased, int gapMs, String deLang, String zhLang, String wordSlow, String spell, String wordNormal, String phrase, String sentence, String zh, int wordSlowCount, int spellCount, int wordNormalCount, int meaningCount, int phraseCount, int sentenceCount, int sentenceCnCount) {
             runOnUiThread(() -> startNativePlayback(startIndexOneBased, 2, 1, gapMs, parseSpeed(wordNormal), deLang, zhLang, true, false, parseSpeed(wordSlow), parseSpeed(spell), parseSpeed(wordNormal), parseSpeed(phrase), parseSpeed(sentence), parseSpeed(zh), wordSlowCount, spellCount, wordNormalCount, meaningCount, phraseCount, sentenceCount, sentenceCnCount));
         }
-
         @JavascriptInterface public void startRandomTrainingWithConfig(int startIndexOneBased, int gapMs, String deLang, String zhLang, String wordSlow, String spell, String wordNormal, String phrase, String sentence, String zh, int wordSlowCount, int spellCount, int wordNormalCount, int meaningCount, int phraseCount, int sentenceCount, int sentenceCnCount) {
             runOnUiThread(() -> startNativePlayback(startIndexOneBased, 2, 1, gapMs, parseSpeed(wordNormal), deLang, zhLang, true, true, parseSpeed(wordSlow), parseSpeed(spell), parseSpeed(wordNormal), parseSpeed(phrase), parseSpeed(sentence), parseSpeed(zh), wordSlowCount, spellCount, wordNormalCount, meaningCount, phraseCount, sentenceCount, sentenceCnCount));
         }
-
-        @JavascriptInterface public void speakText(String text, String lang, String speed, int repeat, int gapMs) {
-            runOnUiThread(() -> startFreeTextPlayback(text, lang, parseSpeed(speed), repeat, gapMs));
-        }
-
+        @JavascriptInterface public void speakText(String text, String lang, String speed, int repeat, int gapMs) { runOnUiThread(() -> startFreeTextPlayback(text, lang, parseSpeed(speed), repeat, gapMs)); }
         @JavascriptInterface public void stop() { runOnUiThread(() -> sendCommand(PlaybackService.ACTION_STOP)); }
         @JavascriptInterface public void battery() { runOnUiThread(() -> openBatterySettings()); }
     }
