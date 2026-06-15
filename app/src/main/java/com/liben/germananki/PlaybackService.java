@@ -24,12 +24,20 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 public class PlaybackService extends Service {
     public static final String ACTION_START = "com.liben.germananki.START";
@@ -49,11 +57,13 @@ public class PlaybackService extends Service {
     private final List<Segment> segmentPlan = new ArrayList<>();
     private final Map<String, String> nounArticles = new HashMap<>();
     private final Random random = new Random();
+    private final Set<String> downloading = Collections.synchronizedSet(new HashSet<>());
 
     private MediaPlayer player;
     private MediaSession mediaSession;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+    private File audioCacheDir;
     private boolean foregroundStarted = false;
     private boolean paused = false;
     private boolean playing = false;
@@ -63,9 +73,11 @@ public class PlaybackService extends Service {
     private String freeTextTitle = "输入文本";
 
     private int cardIndex = 0;
+    private int preparedNextIndex = -1;
     private int segmentInCard = 0;
     private int builtCardIndex = -1;
     private boolean builtTrainingMode = false;
+    private int playbackToken = 0;
     private int deRepeat = 2, zhRepeat = 1, gapMs = 500, retryCount = 0;
     private int wordSlowCount = 3, spellCount = 2, wordNormalCount = 3, meaningCount = 1, phraseCount = 1, sentenceCount = 1, sentenceCnCount = 1;
     private float speed = 0.9f, activeSpeed = 0.9f;
@@ -74,6 +86,8 @@ public class PlaybackService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        audioCacheDir = new File(getCacheDir(), "online_tts_cache");
+        if (!audioCacheDir.exists()) audioCacheDir.mkdirs();
         createChannel();
         createMediaSession();
         createWakeLock();
@@ -116,11 +130,13 @@ public class PlaybackService extends Service {
             trainingMode = intent.getBooleanExtra("trainingMode", intent.getBooleanExtra("spellMode", false));
             loadCardsIfNeeded();
             cardIndex = Math.max(0, Math.min(intent.getIntExtra("startIndex", 0), Math.max(0, cards.size() - 1)));
+            preparedNextIndex = -1;
             segmentInCard = 0;
             clearPlan();
             retryCount = 0;
             paused = false;
             playing = true;
+            playbackToken++;
             acquireLocks();
             playCurrentSegment();
         } else if (ACTION_PAUSE.equals(action)) pausePlayback();
@@ -135,15 +151,18 @@ public class PlaybackService extends Service {
         freeTextMode = true;
         randomReadMode = false;
         trainingMode = false;
+        preparedNextIndex = -1;
         deLang = lang;
         retryCount = 0;
         paused = false;
         playing = true;
+        playbackToken++;
         segmentInCard = 0;
         clearPlan();
         freeTextTitle = text.length() > 28 ? text.substring(0, 28) + "…" : text;
         for (int i = 0; i < repeat; i++) addSeg(text, lang, "输入文本朗读", speed);
         acquireLocks();
+        prefetchAround();
         playCurrentSegment();
     }
 
@@ -242,7 +261,8 @@ public class PlaybackService extends Service {
             activeSpeed = seg.speed;
             updateNotification(seg.phase, freeTextTitle);
             updatePlaybackState(false);
-            playUrl(ttsUrl(seg.text, seg.lang));
+            prefetchAround();
+            playSegment(seg, playbackToken);
             return;
         }
 
@@ -261,7 +281,192 @@ public class PlaybackService extends Service {
         notifyCardChanged(card.id);
         updateNotification((cardIndex + 1) + " / " + cards.size() + " · " + (randomReadMode ? "随机 · " : "") + seg.phase, card.front + " ｜ " + card.meaning);
         updatePlaybackState(false);
-        playUrl(ttsUrl(seg.text, seg.lang));
+        prefetchAround();
+        playSegment(seg, playbackToken);
+    }
+
+    private void playSegment(Segment seg, int token) {
+        String url = ttsUrl(seg.text, seg.lang);
+        File cached = cachedFileFor(url);
+        if (cached.exists() && cached.length() > 0) {
+            playFile(cached, token);
+            return;
+        }
+        new Thread(() -> {
+            File f = downloadToCache(url, true);
+            handler.post(() -> {
+                if (token != playbackToken || !playing || paused) return;
+                if (f != null && f.exists() && f.length() > 0) playFile(f, token);
+                else playUrlDirect(url, token);
+            });
+        }, "tts-current-download").start();
+    }
+
+    private void playFile(File file, int token) {
+        releasePlayer();
+        try {
+            player = new MediaPlayer();
+            try { player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK); } catch (Exception ignored) {}
+            if (Build.VERSION.SDK_INT >= 21) {
+                player.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build());
+            }
+            player.setOnPreparedListener(mp -> {
+                if (token != playbackToken || !playing || paused) return;
+                applySpeed(mp);
+                paused = false;
+                retryCount = 0;
+                mp.start();
+                updatePlaybackState(false);
+            });
+            player.setOnCompletionListener(mp -> advanceSegment());
+            player.setOnErrorListener((mp, what, extra) -> { advanceSegment(); return true; });
+            player.setDataSource(file.getAbsolutePath());
+            player.prepareAsync();
+        } catch (Exception e) {
+            advanceSegment();
+        }
+    }
+
+    private void playUrlDirect(String url, int token) {
+        releasePlayer();
+        try {
+            player = new MediaPlayer();
+            try { player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK); } catch (Exception ignored) {}
+            if (Build.VERSION.SDK_INT >= 21) {
+                player.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build());
+            }
+            player.setOnPreparedListener(mp -> {
+                if (token != playbackToken || !playing || paused) return;
+                applySpeed(mp);
+                paused = false;
+                retryCount = 0;
+                mp.start();
+                updatePlaybackState(false);
+            });
+            player.setOnCompletionListener(mp -> advanceSegment());
+            player.setOnErrorListener((mp, what, extra) -> {
+                if (retryCount < 2 && playing && !paused && token == playbackToken) {
+                    retryCount++;
+                    handler.postDelayed(this::playCurrentSegment, 500);
+                } else {
+                    retryCount = 0;
+                    advanceSegment();
+                }
+                return true;
+            });
+            Map<String, String> headers = new HashMap<>();
+            headers.put("User-Agent", "Mozilla/5.0 Android GermanAnkiPlayer");
+            headers.put("Referer", "https://translate.google.com/");
+            player.setDataSource(this, Uri.parse(url), headers);
+            player.prepareAsync();
+        } catch (Exception e) {
+            advanceSegment();
+        }
+    }
+
+    private void applySpeed(MediaPlayer mp) {
+        try {
+            if (Build.VERSION.SDK_INT >= 23) {
+                PlaybackParams params = mp.getPlaybackParams();
+                params.setSpeed(activeSpeed);
+                mp.setPlaybackParams(params);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void prefetchAround() {
+        final int token = playbackToken;
+        final List<Segment> list = new ArrayList<>();
+        int start = Math.max(0, segmentInCard + 1);
+        int end = Math.min(segmentPlan.size(), start + 10);
+        for (int i = start; i < end; i++) list.add(segmentPlan.get(i));
+        if (!freeTextMode && !cards.isEmpty()) {
+            int next = ensurePreparedNextIndex();
+            if (next >= 0 && next < cards.size()) list.addAll(makePlan(cards.get(next), trainingMode));
+        }
+        if (list.isEmpty()) return;
+        new Thread(() -> {
+            for (Segment s : list) {
+                if (token != playbackToken || !playing) return;
+                downloadToCache(ttsUrl(s.text, s.lang), false);
+            }
+        }, "tts-prefetch").start();
+    }
+
+    private int ensurePreparedNextIndex() {
+        if (preparedNextIndex >= 0 && preparedNextIndex < cards.size() && preparedNextIndex != cardIndex) return preparedNextIndex;
+        if (cards.size() <= 1) return -1;
+        if (!randomReadMode) preparedNextIndex = (cardIndex + 1) % cards.size();
+        else {
+            int next = random.nextInt(cards.size());
+            if (next == cardIndex) next = (next + 1) % cards.size();
+            preparedNextIndex = next;
+        }
+        return preparedNextIndex;
+    }
+
+    private File cachedFileFor(String url) {
+        return new File(audioCacheDir, sha1(url) + ".mp3");
+    }
+
+    private File downloadToCache(String url, boolean waitIfBusy) {
+        File target = cachedFileFor(url);
+        if (target.exists() && target.length() > 0) return target;
+        String key = target.getName();
+        if (!downloading.add(key)) {
+            if (waitIfBusy) {
+                long end = System.currentTimeMillis() + 3500;
+                while (System.currentTimeMillis() < end) {
+                    if (target.exists() && target.length() > 0) return target;
+                    try { Thread.sleep(80); } catch (Exception ignored) {}
+                }
+            }
+            return target.exists() && target.length() > 0 ? target : null;
+        }
+        File tmp = new File(target.getAbsolutePath() + ".tmp");
+        try {
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(10000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 Android GermanAnkiPlayer");
+            conn.setRequestProperty("Referer", "https://translate.google.com/");
+            InputStream in = conn.getInputStream();
+            FileOutputStream out = new FileOutputStream(tmp);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            out.flush();
+            out.close();
+            in.close();
+            if (tmp.length() > 0) {
+                if (target.exists()) target.delete();
+                tmp.renameTo(target);
+            }
+            return target.exists() && target.length() > 0 ? target : null;
+        } catch (Exception e) {
+            try { tmp.delete(); } catch (Exception ignored) {}
+            return null;
+        } finally {
+            downloading.remove(key);
+        }
+    }
+
+    private String sha1(String s) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-1");
+            byte[] bytes = md.digest(s.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : bytes) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return String.valueOf(s.hashCode()).replace('-', 'x');
+        }
     }
 
     private Segment nextFreeTextSegment() {
@@ -290,7 +495,13 @@ public class PlaybackService extends Service {
     }
 
     private int nextAutomaticCardIndex() {
-        if (!randomReadMode || cards.size() <= 1) return (cardIndex + 1) % cards.size();
+        if (cards.size() <= 1) return 0;
+        if (preparedNextIndex >= 0 && preparedNextIndex < cards.size() && preparedNextIndex != cardIndex) {
+            int next = preparedNextIndex;
+            preparedNextIndex = -1;
+            return next;
+        }
+        if (!randomReadMode) return (cardIndex + 1) % cards.size();
         int next = random.nextInt(cards.size());
         if (next == cardIndex) next = (next + 1) % cards.size();
         return next;
@@ -299,44 +510,49 @@ public class PlaybackService extends Service {
     private void ensurePlan(Card card) {
         if (builtCardIndex == cardIndex && builtTrainingMode == trainingMode && !segmentPlan.isEmpty()) return;
         segmentPlan.clear();
+        segmentPlan.addAll(makePlan(card, trainingMode));
         builtCardIndex = cardIndex;
         builtTrainingMode = trainingMode;
-        if (trainingMode) buildTrainingPlan(card); else buildNormalPlan(card);
         if (segmentPlan.isEmpty()) addSeg(spokenWord(card.front), deLang, "德语原声", speed);
     }
 
-    private void buildNormalPlan(Card card) {
+    private List<Segment> makePlan(Card card, boolean useTrainingMode) {
+        List<Segment> out = new ArrayList<>();
         String front = cleanGerman(card.front), word = spokenWord(front), cn = cleanChinese(card.meaning);
-        for (int i = 0; i < Math.max(0, deRepeat); i++) addSeg(word, deLang, "德语朗读", speed);
-        for (int i = 0; i < Math.max(1, spellCount); i++) addSeg(spellGerman(spellBase(front)), deLang, "拼读", spellSpeed);
-        for (int i = 0; i < Math.max(0, zhRepeat); i++) addSeg(cn, zhLang, "中文意思", zhSpeed);
-    }
-
-    private void buildTrainingPlan(Card card) {
-        String front = cleanGerman(card.front), word = spokenWord(front), cn = cleanChinese(card.meaning);
-        for (int i = 0; i < wordSlowCount; i++) addSeg(word, deLang, "慢速单词", wordSlowSpeed);
-        for (int i = 0; i < spellCount; i++) addSeg(spellGerman(spellBase(front)), deLang, "单词拼读", spellSpeed);
-        for (int i = 0; i < wordNormalCount; i++) addSeg(word, deLang, "正常单词", wordNormalSpeed);
-        for (int i = 0; i < meaningCount; i++) addSeg(cn, zhLang, "中文意思", zhSpeed);
+        if (!useTrainingMode) {
+            for (int i = 0; i < Math.max(0, deRepeat); i++) addSegTo(out, word, deLang, "德语朗读", speed);
+            for (int i = 0; i < Math.max(1, spellCount); i++) addSegTo(out, spellGerman(spellBase(front)), deLang, "拼读", spellSpeed);
+            for (int i = 0; i < Math.max(0, zhRepeat); i++) addSegTo(out, cn, zhLang, "中文意思", zhSpeed);
+            return out;
+        }
+        for (int i = 0; i < wordSlowCount; i++) addSegTo(out, word, deLang, "慢速单词", wordSlowSpeed);
+        for (int i = 0; i < spellCount; i++) addSegTo(out, spellGerman(spellBase(front)), deLang, "单词拼读", spellSpeed);
+        for (int i = 0; i < wordNormalCount; i++) addSegTo(out, word, deLang, "正常单词", wordNormalSpeed);
+        for (int i = 0; i < meaningCount; i++) addSegTo(out, cn, zhLang, "中文意思", zhSpeed);
         Related rel = randomRelatedFor(card);
         String phrase = cleanGerman(rel.phrase), sentence = cleanGerman(rel.example), sentenceCn = cleanChinese(rel.exampleCn);
         if (phrase.length() > 0) {
-            addWordSpellPieces(phrase, "词块拆词", "词块拼读");
-            for (int i = 0; i < phraseCount; i++) addSeg(phrase, deLang, "慢速词块", phraseSpeed);
+            addWordSpellPiecesTo(out, phrase, "词块拆词", "词块拼读");
+            for (int i = 0; i < phraseCount; i++) addSegTo(out, phrase, deLang, "慢速词块", phraseSpeed);
         }
         if (sentence.length() > 0) {
-            addWordSpellPieces(sentence, "句子拆词", "句子拼读");
-            for (int i = 0; i < sentenceCount; i++) addSeg(sentence, deLang, "慢速句子", sentenceSpeed);
+            addWordSpellPiecesTo(out, sentence, "句子拆词", "句子拼读");
+            for (int i = 0; i < sentenceCount; i++) addSegTo(out, sentence, deLang, "慢速句子", sentenceSpeed);
         }
-        for (int i = 0; i < sentenceCnCount; i++) addSeg(sentenceCn, zhLang, "句子中文", zhSpeed);
+        for (int i = 0; i < sentenceCnCount; i++) addSegTo(out, sentenceCn, zhLang, "句子中文", zhSpeed);
+        return out;
     }
 
-    private void addWordSpellPieces(String text, String wordPhase, String spellPhase) {
+    private void addWordSpellPiecesTo(List<Segment> out, String text, String wordPhase, String spellPhase) {
         for (String w : wordsFrom(text)) {
             if (w.length() < 2 || isStopWord(w.toLowerCase())) continue;
-            addSeg(spokenWord(w), deLang, wordPhase, wordSlowSpeed);
-            addSeg(spellGerman(spellBase(w)), deLang, spellPhase, spellSpeed);
+            addSegTo(out, spokenWord(w), deLang, wordPhase, wordSlowSpeed);
+            addSegTo(out, spellGerman(spellBase(w)), deLang, spellPhase, spellSpeed);
         }
+    }
+
+    private void addSegTo(List<Segment> out, String text, String lang, String phase, float spd) {
+        if (text != null && text.trim().length() > 0) out.add(new Segment(text.trim(), lang, phase, spd));
     }
 
     private void addSeg(String text, String lang, String phase, float spd) {
@@ -429,51 +645,6 @@ public class PlaybackService extends Service {
     private boolean safeEq(String a, String b) { return a != null && a.equals(b); }
     private void clearPlan() { segmentPlan.clear(); builtCardIndex = -1; }
 
-    private void playUrl(String url) {
-        releasePlayer();
-        try {
-            player = new MediaPlayer();
-            try { player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK); } catch (Exception ignored) {}
-            if (Build.VERSION.SDK_INT >= 21) {
-                player.setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build());
-            }
-            player.setOnPreparedListener(mp -> {
-                try {
-                    if (Build.VERSION.SDK_INT >= 23) {
-                        PlaybackParams params = mp.getPlaybackParams();
-                        params.setSpeed(activeSpeed);
-                        mp.setPlaybackParams(params);
-                    }
-                } catch (Exception ignored) {}
-                paused = false;
-                retryCount = 0;
-                mp.start();
-                updatePlaybackState(false);
-            });
-            player.setOnCompletionListener(mp -> advanceSegment());
-            player.setOnErrorListener((mp, what, extra) -> {
-                if (retryCount < 2 && playing && !paused) {
-                    retryCount++;
-                    handler.postDelayed(this::playCurrentSegment, 500);
-                } else {
-                    retryCount = 0;
-                    advanceSegment();
-                }
-                return true;
-            });
-            Map<String, String> headers = new HashMap<>();
-            headers.put("User-Agent", "Mozilla/5.0 Android GermanAnkiPlayer");
-            headers.put("Referer", "https://translate.google.com/");
-            player.setDataSource(this, Uri.parse(url), headers);
-            player.prepareAsync();
-        } catch (Exception e) {
-            advanceSegment();
-        }
-    }
-
     private void advanceSegment() {
         if (!playing || paused) return;
         handler.removeCallbacksAndMessages(null);
@@ -485,12 +656,14 @@ public class PlaybackService extends Service {
     private void nextCard() {
         freeTextMode = false;
         randomReadMode = false;
+        preparedNextIndex = -1;
         if (cards.isEmpty()) loadCardsIfNeeded();
         if (!cards.isEmpty()) cardIndex = (cardIndex + 1) % cards.size();
         segmentInCard = 0;
         clearPlan();
         paused = false;
         playing = true;
+        playbackToken++;
         retryCount = 0;
         acquireLocks();
         playCurrentSegment();
@@ -499,12 +672,14 @@ public class PlaybackService extends Service {
     private void prevCard() {
         freeTextMode = false;
         randomReadMode = false;
+        preparedNextIndex = -1;
         if (cards.isEmpty()) loadCardsIfNeeded();
         if (!cards.isEmpty()) cardIndex = (cardIndex - 1 + cards.size()) % cards.size();
         segmentInCard = 0;
         clearPlan();
         paused = false;
         playing = true;
+        playbackToken++;
         retryCount = 0;
         acquireLocks();
         playCurrentSegment();
@@ -514,6 +689,7 @@ public class PlaybackService extends Service {
         try { if (player != null && player.isPlaying()) player.pause(); } catch (Exception ignored) {}
         paused = true;
         playing = false;
+        playbackToken++;
         updateNotification("已暂停", freeTextMode ? freeTextTitle : currentText());
         updatePlaybackState(true);
     }
@@ -521,6 +697,7 @@ public class PlaybackService extends Service {
     private void resumePlayback() {
         paused = false;
         playing = true;
+        playbackToken++;
         acquireLocks();
         try {
             if (player != null) {
@@ -534,10 +711,12 @@ public class PlaybackService extends Service {
     }
 
     private void stopPlayback() {
+        playbackToken++;
         playing = false;
         paused = false;
         freeTextMode = false;
         randomReadMode = false;
+        preparedNextIndex = -1;
         releasePlayer();
         handler.removeCallbacksAndMessages(null);
         releaseLocks();
