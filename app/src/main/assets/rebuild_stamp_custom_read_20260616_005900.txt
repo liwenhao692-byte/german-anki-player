@@ -1,0 +1,4 @@
+force apk binary change
+custom read settings
+online google tts via MediaPlayer
+build stamp 20260616-005900
