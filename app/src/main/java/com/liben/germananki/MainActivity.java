@@ -69,6 +69,14 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "已启动朗读", Toast.LENGTH_SHORT).show();
     }
 
+    private void startBackgroundSequence(String sequenceJson) {
+        Intent intent = new Intent(this, PlaybackService.class);
+        intent.setAction(PlaybackService.ACTION_START);
+        intent.putExtra("sequenceJson", sequenceJson == null ? "[]" : sequenceJson);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent); else startService(intent);
+        Toast.makeText(this, "已启动息屏播放", Toast.LENGTH_SHORT).show();
+    }
+
     private void sendCommand(String action) {
         Intent intent = new Intent(this, PlaybackService.class);
         intent.setAction(action);
@@ -82,6 +90,9 @@ public class MainActivity extends Activity {
     public class NativeBridge {
         @JavascriptInterface public void speakText(String text, String lang, String speed, int repeat, int gapMs) {
             runOnUiThread(() -> startFreeTextPlayback(text, lang, parseSpeed(speed), repeat, gapMs));
+        }
+        @JavascriptInterface public void playBackgroundSequence(String sequenceJson) {
+            runOnUiThread(() -> startBackgroundSequence(sequenceJson));
         }
         @JavascriptInterface public void stop() {
             runOnUiThread(() -> sendCommand(PlaybackService.ACTION_STOP));
