@@ -28,27 +28,22 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android platform
-        run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Patch verified custom read plan
+      - name: Patch custom read plan without exact string matching
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path('app/src/main/java/com/liben/germananki/PlaybackService.java')
           s = p.read_text()
-          old = '''        if (!full) {
-              for (int i = 0; i < deRepeat; i++) add(out, word, deLang, "德语朗读", speed);
-              for (int i = 0; i < Math.max(1, spellCount); i++) add(out, spellGerman(spellBase(front)), deLang, "拼读", spellSpeed);
-              for (int i = 0; i < zhRepeat; i++) add(out, cn, zhLang, "中文意思", zhSpeed);
-              return out;
-          }
-          '''
+          method = s.index('private List<Segment> makePlan')
+          start = s.index('        if (!full) {', method)
+          end = s.index('        for (int i = 0; i < wordSlowCount;', start)
           new = '''        if (!full) {
               Related r = randomRelatedFor(c);
               String phrase = cleanGerman(r.phrase), sentence = cleanGerman(r.example), sentenceCn = cleanChinese(r.exampleCn);
@@ -60,24 +55,20 @@ jobs:
               if (sentenceCn.length() > 0) for (int i = 0; i < sentenceCnCount; i++) add(out, sentenceCn, zhLang, "句子中文", zhSpeed);
               return out;
           }
-          '''
-          if old in s:
-              s = s.replace(old, new)
-          elif 'for (int i = 0; i < wordNormalCount; i++) add(out, word, deLang, "单词", wordNormalSpeed);' not in s:
-              raise SystemExit('custom read patch target not found')
-          p.write_text(s)
+'''
+          p.write_text(s[:start] + new + s[end:])
           PY
 
       - name: Add build stamp to force APK binary update
         run: |
           mkdir -p app/src/main/assets
           {
-            echo "custom-read-online-tts"
+            echo "fixed-custom-read-online-tts"
             date -u +%Y%m%d-%H%M%S
             git rev-parse HEAD
           } > app/src/main/assets/build_stamp.txt
 
-      - name: Verify no Android TextToSpeech is used
+      - name: Verify online MediaPlayer implementation
         run: |
           ! grep -R "TextToSpeech" app/src/main/java/com/liben/germananki || (echo "TextToSpeech found" && exit 1)
           grep -R "translate_tts" app/src/main/java/com/liben/germananki/PlaybackService.java
