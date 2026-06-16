@@ -36,7 +36,7 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Patch custom normal read plan
+      - name: Patch verified custom read plan
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -49,7 +49,6 @@ jobs:
               return out;
           }
           '''
-          old = old.replace('          ', '        ')
           new = '''        if (!full) {
               Related r = randomRelatedFor(c);
               String phrase = cleanGerman(r.phrase), sentence = cleanGerman(r.example), sentenceCn = cleanChinese(r.exampleCn);
@@ -62,11 +61,30 @@ jobs:
               return out;
           }
           '''
-          new = new.replace('          ', '        ')
-          if old not in s:
-              raise SystemExit('normal read plan patch target not found')
-          p.write_text(s.replace(old, new))
+          if old in s:
+              s = s.replace(old, new)
+          elif 'for (int i = 0; i < wordNormalCount; i++) add(out, word, deLang, "单词", wordNormalSpeed);' not in s:
+              raise SystemExit('custom read patch target not found')
+          p.write_text(s)
           PY
+
+      - name: Add build stamp to force APK binary update
+        run: |
+          mkdir -p app/src/main/assets
+          {
+            echo "custom-read-online-tts"
+            date -u +%Y%m%d-%H%M%S
+            git rev-parse HEAD
+          } > app/src/main/assets/build_stamp.txt
+
+      - name: Verify no Android TextToSpeech is used
+        run: |
+          ! grep -R "TextToSpeech" app/src/main/java/com/liben/germananki || (echo "TextToSpeech found" && exit 1)
+          grep -R "translate_tts" app/src/main/java/com/liben/germananki/PlaybackService.java
+          grep -R "MediaPlayer" app/src/main/java/com/liben/germananki/PlaybackService.java
+          grep -R "wordNormalCount" app/src/main/java/com/liben/germananki/PlaybackService.java
+          grep -R "phraseCount" app/src/main/java/com/liben/germananki/PlaybackService.java
+          grep -R "sentenceCount" app/src/main/java/com/liben/germananki/PlaybackService.java
 
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
