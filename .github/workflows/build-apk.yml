@@ -34,16 +34,23 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Patch custom read plan without exact string matching
+      - name: Patch custom read plan
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('app/src/main/java/com/liben/germananki/PlaybackService.java')
           s = p.read_text()
           method = s.index('private List<Segment> makePlan')
           start = s.index('        if (!full) {', method)
           end = s.index('        for (int i = 0; i < wordSlowCount;', start)
-          new = '''        if (!full) {
+          current = s[start:end]
+
+          if 'wordNormalCount' in current and 'phraseCount' in current and 'sentenceCount' in current:
+              print('Custom read plan already patched')
+          else:
+              new = '''        if (!full) {
               Related r = randomRelatedFor(c);
               String phrase = cleanGerman(r.phrase), sentence = cleanGerman(r.example), sentenceCn = cleanChinese(r.exampleCn);
               for (int i = 0; i < wordNormalCount; i++) add(out, word, deLang, "单词", wordNormalSpeed);
@@ -55,11 +62,13 @@ jobs:
               return out;
           }
 '''
-          p.write_text(s[:start] + new + s[end:])
+              p.write_text(s[:start] + new + s[end:])
+              print('Custom read plan patched')
           PY
 
       - name: Add build stamp to force APK binary update
         run: |
+          set -euo pipefail
           mkdir -p app/src/main/assets
           {
             echo "fixed-custom-read-online-tts"
@@ -69,6 +78,7 @@ jobs:
 
       - name: Verify online MediaPlayer implementation
         run: |
+          set -euo pipefail
           ! grep -R "TextToSpeech" app/src/main/java/com/liben/germananki || (echo "TextToSpeech found" && exit 1)
           grep -R "translate_tts" app/src/main/java/com/liben/germananki/PlaybackService.java
           grep -R "MediaPlayer" app/src/main/java/com/liben/germananki/PlaybackService.java
@@ -87,10 +97,15 @@ jobs:
 
       - name: Commit APK file to repository
         run: |
+          set -euo pipefail
           mkdir -p apk
           cp app/build/outputs/apk/debug/app-debug.apk apk/german-anki-player-debug.apk
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f apk/german-anki-player-debug.apk
-          git commit -m "Build debug APK [skip ci]" || echo "No APK changes"
-          git push
+          if git diff --cached --quiet; then
+            echo "No APK changes"
+          else
+            git commit -m "Build debug APK [skip ci]"
+            git push
+          fi
