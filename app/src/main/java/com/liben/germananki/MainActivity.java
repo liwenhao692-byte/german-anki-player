@@ -61,7 +61,9 @@ public class MainActivity extends Activity {
             String js = readAsset("online_audio_patch.js");
             if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(js, null);
             else webView.loadUrl("javascript:" + js);
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Toast.makeText(this, "音频补丁加载失败", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private String readAsset(String name) throws Exception {
