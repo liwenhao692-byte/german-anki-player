@@ -14,6 +14,9 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+
 public class MainActivity extends Activity {
     private static final String ENTRY_HTML = "index.html";
     private WebView webView;
@@ -40,12 +43,35 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 21) settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
         webView.setWebChromeClient(new WebChromeClient());
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                injectOnlineAudioPatch();
+            }
+        });
         webView.addJavascriptInterface(new NativeBridge(), "NativePlayer");
 
         root.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         webView.loadUrl("file:///android_asset/" + ENTRY_HTML);
+    }
+
+    private void injectOnlineAudioPatch() {
+        try {
+            String js = readAsset("online_audio_patch.js");
+            if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(js, null);
+            else webView.loadUrl("javascript:" + js);
+        } catch (Exception ignored) {}
+    }
+
+    private String readAsset(String name) throws Exception {
+        InputStream is = getAssets().open(name);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = is.read(buf)) != -1) bos.write(buf, 0, n);
+        is.close();
+        return bos.toString("UTF-8");
     }
 
     private float parseSpeed(String value) {
