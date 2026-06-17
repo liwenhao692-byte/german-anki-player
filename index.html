@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang='zh-CN'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover'>
+<title>Lexora 德语 Anki</title>
+<style>
+body{margin:0;min-height:100vh;background:#050914;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',Arial,sans-serif;display:grid;place-items:center}.box{padding:18px;border:1px solid rgba(120,155,230,.25);border-radius:20px;background:rgba(8,17,31,.9);font-weight:800}
+</style>
+</head>
+<body>
+<div class='box'>正在加载 Lexora 音频网页……</div>
+<script>
+(function(){
+  var assetBase='app/src/main/assets/';
+  fetch(assetBase+'index.html').then(function(r){return r.text()}).then(function(html){
+    html=html.replace('<head>','<head><base href='+JSON.stringify(assetBase)+'>');
+    html=html.replace('<script>','<script src=\'online_audio_patch.js\'></script><script>');
+    document.open();
+    document.write(html);
+    document.close();
+  }).catch(function(){
+    document.body.innerHTML='<div class=\'box\'>网页加载失败，请检查 GitHub Pages 是否启用。</div>';
+  });
+})();
+</script>
+</body>
+</html>
