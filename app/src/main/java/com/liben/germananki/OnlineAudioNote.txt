@@ -1,0 +1,1 @@
+Need replace PlaybackService TextToSpeech with online MediaPlayer audio for sequenceJson.
