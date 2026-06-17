@@ -54,4 +54,4 @@
 2. 在系统设置里把本 App 的电池优化设为“不限制”。
 3. 播放时保持联网。
 
-Build trigger: 2026-06-17-online-audio-patch-v5
+Build trigger: 2026-06-17-online-audio-patch-v6
